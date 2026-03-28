@@ -1,0 +1,131 @@
+\documentclass[11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+\usepackage{enumitem}
+
+\title{Project Proposal\\Station-Level Monitoring and Short-Term Forecasting of Bicycle Counts in Flanders}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\begin{center}
+\textbf{Group 16}
+
+\vspace{0.5em}
+
+\begin{tabular}{ll}
+Ghasemian Moghaddam Alireza & 1079987 \\
+Xuanan Li & r1070796 \\
+Yavuz Tok & r0882205 \\
+Zeren Su & r1082963 \\
+\end{tabular}
+\end{center}
+
+\section{Project Idea}
+
+In this project, we want to build an interactive dashboard for monitoring bicycle traffic at counting stations in Flanders and for producing short-term forecasts for selected stations. The data comes from the AWV bicycle counting system and includes monthly count files together with station metadata and direction metadata.
+
+We deliberately define the project at the station level. The available data is collected at fixed counting points, so it is suitable for analysing traffic patterns at those locations, but not for describing the full road network in real time. For that reason, we see the main users of the dashboard as transport planners or infrastructure managers rather than individual cyclists.
+
+Our aim is to answer two practical questions. First, how does bicycle traffic change across stations and over time? Second, can we make useful short-term predictions for a selected station based on its historical pattern?
+
+\section{Data}
+
+We will use the files in the AWV dataset:
+
+\begin{itemize}[leftmargin=*]
+    \item \texttt{data-YYYY-MM.csv}: monthly count data
+    \item \texttt{sites.csv}: metadata about the stations, including coordinates and municipality
+    \item \texttt{richtingen.csv}: metadata about the counting directions
+\end{itemize}
+
+From a first inspection of the data, the dataset contains around 151 stations and is mostly recorded at 15-minute intervals. The monthly files are fairly large, so an important first step will be to preprocess and aggregate the data before building the dashboard.
+
+For the count files, we will use the variables \texttt{site ID}, \texttt{richting}, \texttt{type}, \texttt{van}, \texttt{tot}, and \texttt{aantal}. Since the dataset can include several object types, we will focus on \texttt{FIETSERS} only. We will then merge the count data with \texttt{sites.csv} and \texttt{richtingen.csv}.
+
+\section{Planned Method}
+
+\subsection{Data cleaning and aggregation}
+
+We will first build a preprocessing pipeline in Python. The main steps will be:
+
+\begin{itemize}[leftmargin=*]
+    \item adding column names to the raw CSV files
+    \item parsing the time variables
+    \item filtering the data to bicycle counts only
+    \item merging the monthly files into one dataset
+    \item joining the count data with the station and direction metadata
+    \item aggregating the counts from 15-minute level to hourly level
+\end{itemize}
+
+Because many stations have separate \texttt{IN} and \texttt{OUT} records, we will also create a station-level total count by combining both directions where appropriate. This will make the monitoring view and the forecasting task easier to interpret.
+
+\subsection{Exploratory analysis}
+
+Before building the forecasting model, we want to understand the main patterns in the data. In particular, we plan to study:
+
+\begin{itemize}[leftmargin=*]
+    \item differences in traffic intensity across stations
+    \item daily and weekly traffic patterns
+    \item weekday versus weekend differences
+    \item seasonal variation across the year
+    \item potential missing values or inactive periods
+\end{itemize}
+
+This step is important because it will show which stations are stable enough for forecasting and which temporal patterns are strongest.
+
+\subsection{Short-term forecasting}
+
+Our forecasting goal is modest: for a selected station, predict bicycle traffic for the next 24 hours or next 7 days at hourly level. We do not aim to make long-term forecasts or network-wide predictions.
+
+We plan to compare:
+
+\begin{itemize}[leftmargin=*]
+    \item a simple seasonal naive baseline
+    \item a Prophet model for short-term station-level forecasting
+\end{itemize}
+
+The baseline is important because it gives us a realistic reference point. If time permits, we may test one additional model such as SARIMAX, but our main comparison will be between a simple baseline and Prophet. Model performance will be evaluated with a time-based train-test split and metrics such as MAE, RMSE, and WAPE.
+
+We may also add simple calendar features such as weekday/weekend and holidays. If time allows and suitable data is available, we may explore weather as an extension, but this is not essential for the core project.
+
+\section{Dashboard}
+
+The final product will be a Python Shiny dashboard. We currently imagine three main views:
+
+\begin{itemize}[leftmargin=*]
+    \item a map view showing the counting stations
+    \item a station detail view with historical trends and summary plots
+    \item a forecasting view showing future hourly counts for a selected station
+\end{itemize}
+
+In the map view, the user will be able to compare stations by traffic level. In the station detail view, the user will be able to inspect patterns such as peak hours or seasonal changes. In the forecasting view, the user will see the short-term prediction together with recent historical data.
+
+To keep the app responsive, we will not load all raw CSV files directly in the dashboard. Instead, we will preprocess the data beforehand and store cleaned and aggregated tables in a more efficient format.
+
+\section{Tools}
+
+We plan to use:
+
+\begin{itemize}[leftmargin=*]
+    \item Python
+    \item pandas or polars for preprocessing
+    \item Plotly for interactive visualisation
+    \item Python Shiny for the dashboard
+    \item Prophet and statsmodels for forecasting
+    \item Parquet or DuckDB for storing processed data
+\end{itemize}
+
+\section{Expected Result}
+
+We expect to deliver a working dashboard, a cleaned station-level dataset, and a comparison of short-term forecasting approaches. We hope the project will show which stations have strong and predictable traffic patterns, and where short-term forecasting works reasonably well.
+
+At the same time, we are aware of that the dataset is station-based, not full-network data, and it is updated monthly rather than in real time. Because of this, our project should be seen as a monitoring and planning tool, not as a live routing tool for cyclists.
+
+\end{document}
