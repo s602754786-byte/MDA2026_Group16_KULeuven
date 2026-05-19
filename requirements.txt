@@ -1,0 +1,7 @@
+pandas
+pyarrow
+plotly
+shiny
+shinywidgets
+scikit-learn
+prophet

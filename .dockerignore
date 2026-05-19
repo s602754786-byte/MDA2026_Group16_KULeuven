@@ -1,0 +1,12 @@
+.git/
+.DS_Store
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+fietstellingen_csv/
+data/raw/
+data/processed/
+*.parquet
+
+proposal/

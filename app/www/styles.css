@@ -1,0 +1,68 @@
+:root {
+  --mda-ink: #1d2b2a;
+  --mda-muted: #657472;
+  --mda-teal: #1f8a70;
+  --mda-sky: #3a7ca5;
+  --mda-warm: #f2b35d;
+  --mda-surface: #f7faf8;
+}
+
+body {
+  background: linear-gradient(180deg, #f5faf7 0%, #eef5f2 100%);
+  color: var(--mda-ink);
+}
+
+.navbar {
+  border-bottom: 1px solid rgba(29, 43, 42, 0.12);
+  box-shadow: 0 2px 14px rgba(29, 43, 42, 0.06);
+}
+
+.card {
+  border: 1px solid rgba(29, 43, 42, 0.1);
+  border-radius: 8px;
+  box-shadow: 0 8px 20px rgba(29, 43, 42, 0.05);
+}
+
+.card-header {
+  background: #ffffff;
+  border-bottom: 1px solid rgba(29, 43, 42, 0.08);
+  color: var(--mda-ink);
+  font-weight: 700;
+}
+
+.status-pill,
+.missing-data {
+  display: inline-block;
+  margin: 0.25rem 0 1rem;
+  padding: 0.45rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.9rem;
+}
+
+.status-pill {
+  color: #0c4a3c;
+  background: rgba(31, 138, 112, 0.12);
+  border: 1px solid rgba(31, 138, 112, 0.25);
+}
+
+.missing-data {
+  color: #7a3e00;
+  background: rgba(242, 179, 93, 0.18);
+  border: 1px solid rgba(242, 179, 93, 0.35);
+}
+
+.bslib-value-box {
+  border-radius: 8px;
+}
+
+pre {
+  background: #10201f;
+  color: #e8f5ef;
+  border-radius: 8px;
+  padding: 1rem;
+  border: 1px solid rgba(29, 43, 42, 0.2);
+}
+
+.shiny-data-grid {
+  font-size: 0.92rem;
+}

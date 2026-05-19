@@ -2,30 +2,73 @@
 
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
-\usepackage[margin=1in]{geometry}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage[dvipsnames]{xcolor}
 \usepackage{hyperref}
 \usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{parskip}
+\usepackage{titlesec}
 
-\title{Project Proposal\\Station-Level Monitoring and Short-Term Forecasting of Bicycle Counts in Flanders}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=MidnightBlue,
+    urlcolor=MidnightBlue
+}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.55em}
+\setlist[itemize]{leftmargin=1.6em,itemsep=0.35em,topsep=0.4em}
+
+\titleformat{\section}
+    {\Large\bfseries\color{MidnightBlue}}
+    {}{0pt}{}
+\titleformat{\subsection}
+    {\normalsize\bfseries\color{Black}}
+    {}{0pt}{}
+\titlespacing*{\section}{0pt}{1.2em}{0.5em}
+\titlespacing*{\subsection}{0pt}{0.9em}{0.35em}
+
+\newcommand{\proposaltitle}{Bicycle Traffic Monitoring and Forecasting}
+
 \author{}
 \date{}
 
 \begin{document}
 
-\maketitle
-
 \begin{center}
-\textbf{Group 16}
+    {\small\scshape KU Leuven \par}
+    \vspace{0.8em}
+    {\color{MidnightBlue}\rule{0.85\textwidth}{1.1pt}\par}
+    \vspace{1em}
+    {\Huge\bfseries Project Proposal\par}
+    \vspace{0.55em}
+    {\LARGE\bfseries \proposaltitle\par}
+    \vspace{1em}
+    {\large\color{MidnightBlue}\textbf{Group 16}\par}
+    \vspace{1.1em}
+    {\normalsize\textbf{Ghasemian Moghaddam Alireza}\par}
+    {\small\color{gray}1079987\par}
+    \vspace{0.6em}
 
-\vspace{0.5em}
+    {\normalsize\textbf{Xuanang Li}\par}
+    {\small\color{gray}r1070796\par}
+    \vspace{0.6em}
 
-\begin{tabular}{ll}
-Ghasemian Moghaddam Alireza & 1079987 \\
-Xuanan Li & r1070796 \\
-Yavuz Tok & r0882205 \\
-Zeren Su & r1082963 \\
-\end{tabular}
+    {\normalsize\textbf{Yavuz Tok}\par}
+    {\small\color{gray}r0882205\par}
+    \vspace{0.6em}
+
+    {\normalsize\textbf{Zeren Su}\par}
+    {\small\color{gray}r1082963\par}
+    \vspace{0.9em}
+    {\color{MidnightBlue}\rule{0.85\textwidth}{0.9pt}\par}
 \end{center}
+
+\vspace{1.1em}
 
 \section{Project Idea}
 
@@ -39,7 +82,7 @@ Our aim is to answer two practical questions. First, how does bicycle traffic ch
 
 We will use the files in the AWV dataset:
 
-\begin{itemize}[leftmargin=*]
+\begin{itemize}
     \item \texttt{data-YYYY-MM.csv}: monthly count data
     \item \texttt{sites.csv}: metadata about the stations, including coordinates and municipality
     \item \texttt{richtingen.csv}: metadata about the counting directions
@@ -55,7 +98,7 @@ For the count files, we will use the variables \texttt{site ID}, \texttt{richtin
 
 We will first build a preprocessing pipeline in Python. The main steps will be:
 
-\begin{itemize}[leftmargin=*]
+\begin{itemize}
     \item adding column names to the raw CSV files
     \item parsing the time variables
     \item filtering the data to bicycle counts only
@@ -70,7 +113,7 @@ Because many stations have separate \texttt{IN} and \texttt{OUT} records, we wil
 
 Before building the forecasting model, we want to understand the main patterns in the data. In particular, we plan to study:
 
-\begin{itemize}[leftmargin=*]
+\begin{itemize}
     \item differences in traffic intensity across stations
     \item daily and weekly traffic patterns
     \item weekday versus weekend differences
@@ -86,7 +129,7 @@ Our forecasting goal is modest: for a selected station, predict bicycle traffic 
 
 We plan to compare:
 
-\begin{itemize}[leftmargin=*]
+\begin{itemize}
     \item a simple seasonal naive baseline
     \item a Prophet model for short-term station-level forecasting
 \end{itemize}
@@ -99,7 +142,7 @@ We may also add simple calendar features such as weekday/weekend and holidays. I
 
 The final product will be a Python Shiny dashboard. We currently imagine three main views:
 
-\begin{itemize}[leftmargin=*]
+\begin{itemize}
     \item a map view showing the counting stations
     \item a station detail view with historical trends and summary plots
     \item a forecasting view showing future hourly counts for a selected station
@@ -113,7 +156,7 @@ To keep the app responsive, we will not load all raw CSV files directly in the d
 
 We plan to use:
 
-\begin{itemize}[leftmargin=*]
+\begin{itemize}
     \item Python
     \item pandas or polars for preprocessing
     \item Plotly for interactive visualisation
