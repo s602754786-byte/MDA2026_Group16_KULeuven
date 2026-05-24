@@ -11,8 +11,8 @@ Say:
 Key point:
 
 - Monitoring and planning use all 150 processed stations.
-- Saved advanced forecasts are generated for the busiest 12 eligible stations by default to keep the demo fast.
-- The pipeline can be rerun for all eligible stations with `--all-stations`.
+- Saved forecasts are generated for all 147 eligible stations in the latest run.
+- The pipeline can be rerun with `--all-stations` when new data is added.
 
 ## 2. Overview
 
@@ -22,11 +22,10 @@ Show:
 - Station map.
 - Station count, hourly rows, total cyclists.
 - Highest average daily traffic table.
-- Fastest recent growth table.
 
 Say:
 
-> This page answers where bicycle traffic is concentrated and which locations are changing quickly. The map gives a spatial overview, while the ranking tables help identify high-demand and fast-growth stations.
+> This page answers where bicycle traffic is concentrated. The map gives a spatial overview, while the ranking table helps identify high-demand stations.
 
 ## 3. Station Detail
 
@@ -51,56 +50,53 @@ Say:
 
 Show:
 
-- Forecast scope card.
 - 24-hour and 168-hour horizon options.
 - Recent history plus forecast curves.
 - Model evaluation table.
-- Model added value table.
+- Scope and interpretation note.
 
 Say:
 
-> We compare three models: seasonal naive, histogram gradient boosting, and Prophet. The metrics are not based on a single final week only; they are averaged over three rolling backtest windows. The best model is selected per station based on WAPE.
+> We compare two models: a seasonal naive baseline and histogram gradient boosting. The metrics are not based on a single final week only; they are averaged over three rolling backtest windows. The best model is selected per station based on WAPE.
 
 Mention:
 
 - Seasonal naive is the baseline.
 - Histogram gradient boosting is the feature-based sklearn model.
-- Prophet is the time-series benchmark.
 - HGB currently wins for most of the forecasted stations, but the baseline remains competitive.
 
 ## 5. Planning Insights
 
 Show:
 
-- Infrastructure priority shortlist.
-- Priority score formula.
-- High demand stations.
-- Peak pressure stations.
-- Fast growth stations.
-- Lowest data coverage.
-- Most predictable stations.
+- Fast Growth tab: stations where short-term average demand is rising.
+- Fast Decline tab: stations where short-term average demand is falling.
+- Daily Outliers tab: stations with many statistically unusual days in the latest 4 weeks.
 
 Say:
 
-> This page translates monitoring and forecasting outputs into planning signals. The priority score combines demand, peak pressure, recent growth, forecast reliability, and data coverage. It is not an automatic investment decision, but a screening tool that tells planners where to look first.
+> This page separates three planning questions: which stations show strengthening demand, which stations show weakening demand, and which stations recently had many unusual daily counts.
 
-Explain recommendation examples:
+Explain the moving-average rule:
 
-- `Capacity upgrade candidate`: high use and recent growth.
-- `High-demand corridor`: high overall demand.
-- `Peak-hour pressure`: high rush-hour pressure.
-- `Check sensor/data quality`: coverage is too low for reliable decisions.
-- `Keep monitoring`: no urgent signal yet.
+- Growth and decline are based on 1-week, 2-week, and 4-week average daily counts.
+- Fast Growth uses `ma_1w > ma_2w > ma_4w`.
+- Fast Decline uses `ma_1w < ma_2w < ma_4w`.
+- Daily Outliers compares each day only with the same station and same weekday.
+- The baseline is robust: weekday median plus MAD-based scale.
+- A day is marked as outlier if `abs(robust z-score) > 2.576`, using a two-sided 99% cutoff.
+- The table ranks stations by the number of outlier days in the latest 4 weeks.
 
 ## 6. ML Engineering
 
 Show:
 
 - Processed rows.
-- Models, stations, and backtest windows.
-- Pipeline status.
-- Generated artifacts.
-- Re-run commands.
+- Forecast stations.
+- Backtest windows and forecast horizon.
+- End-to-end pipeline.
+- Run status and dashboard artifacts.
+- Operational commands.
 
 Say:
 

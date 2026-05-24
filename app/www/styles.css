@@ -55,6 +55,59 @@ body {
   border-radius: 8px;
 }
 
+.pipeline-flow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.flow-step {
+  position: relative;
+  min-height: 165px;
+  padding: 1rem;
+  border: 1px solid rgba(31, 138, 112, 0.18);
+  border-radius: 10px;
+  background: linear-gradient(180deg, #ffffff 0%, #f3faf6 100%);
+}
+
+.flow-step-number {
+  width: 2rem;
+  height: 2rem;
+  display: grid;
+  place-items: center;
+  margin-bottom: 0.7rem;
+  border-radius: 999px;
+  color: #ffffff;
+  background: var(--mda-teal);
+  font-weight: 700;
+}
+
+.flow-step h5 {
+  margin-bottom: 0.45rem;
+  color: var(--mda-ink);
+  font-weight: 700;
+}
+
+.flow-step p {
+  margin-bottom: 0;
+  color: var(--mda-muted);
+  line-height: 1.4;
+}
+
+.compact-explainer p {
+  margin-bottom: 0.45rem;
+}
+
+.compact-explainer ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.compact-explainer li {
+  margin-bottom: 0.25rem;
+  line-height: 1.35;
+}
+
 pre {
   background: #10201f;
   color: #e8f5ef;
@@ -65,4 +118,16 @@ pre {
 
 .shiny-data-grid {
   font-size: 0.92rem;
+}
+
+@media (max-width: 1000px) {
+  .pipeline-flow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .pipeline-flow {
+    grid-template-columns: 1fr;
+  }
 }

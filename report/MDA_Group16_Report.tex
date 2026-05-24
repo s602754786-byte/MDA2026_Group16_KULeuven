@@ -15,6 +15,7 @@
 \usepackage{titlesec}
 \usepackage{amsmath}
 \usepackage{graphicx}
+\usepackage{float}
 
 \hypersetup{
     colorlinks=true,
@@ -23,10 +24,10 @@
 }
 
 \setlength{\parindent}{0pt}
-\setlength{\parskip}{0.55em}
-\setlist[itemize]{leftmargin=1.4em,itemsep=0.25em,topsep=0.3em}
-\setlist[enumerate]{leftmargin=1.4em,itemsep=0.25em,topsep=0.3em}
-\renewcommand{\arraystretch}{1.15}
+\setlength{\parskip}{0.48em}
+\setlist[itemize]{leftmargin=1.35em,itemsep=0.2em,topsep=0.25em}
+\setlist[enumerate]{leftmargin=1.35em,itemsep=0.2em,topsep=0.25em}
+\renewcommand{\arraystretch}{1.12}
 
 \titleformat{\section}
     {\Large\bfseries\color{MidnightBlue}}
@@ -34,8 +35,8 @@
 \titleformat{\subsection}
     {\normalsize\bfseries\color{Black}}
     {\thesubsection}{0.55em}{}
-\titlespacing*{\section}{0pt}{1.15em}{0.45em}
-\titlespacing*{\subsection}{0pt}{0.85em}{0.25em}
+\titlespacing*{\section}{0pt}{1.05em}{0.38em}
+\titlespacing*{\subsection}{0pt}{0.75em}{0.18em}
 
 \newcommand{\projecttitle}{Bicycle Traffic Monitoring and Forecasting}
 \newcommand{\code}[1]{\texttt{#1}}
@@ -73,73 +74,65 @@
 
 \section{Executive Summary}
 
-This project develops a Python Shiny dashboard and supporting data pipeline for station-level bicycle traffic monitoring and short-term forecasting in Flanders. The data comes from the public AWV \emph{fietstellingen} dataset, which provides monthly automatic count files together with site and direction metadata. The resulting system is designed for transport planners and infrastructure managers who need to monitor bicycle usage, identify pressure points, and decide which stations deserve further investigation.
+This project builds a station-level bicycle traffic monitoring and forecasting dashboard for Flanders using the public AWV \emph{fietstellingen} dataset. The intended users are transport planners and infrastructure managers who need to inspect cycling demand, understand local station patterns, identify unusual recent behavior, and access short-term forecasts.
 
-The final implementation is not a one-off notebook analysis. It is structured as a small analytics system: raw monthly CSV files are ingested, filtered to cyclist counts, aggregated to hourly station-level observations, stored as Parquet files, evaluated with repeatable model backtests, and served through an interactive dashboard. The pipeline currently processes 81 monthly files from August 2019 to April 2026, producing 5,311,003 hourly station records for 150 stations. Across the full processed dataset, the total number of counted cyclists is 107,385,663. Median station data coverage is 99.58\%, which makes the data broadly suitable for monitoring while still requiring quality checks for some stations.
+The implementation is deliberately organized as a small modern data analytics system rather than a one-off analysis. Raw monthly CSV files are ingested, cyclist records are filtered and aggregated to hourly station counts, processed data is stored as Parquet, forecast models are evaluated through rolling backtests, and the Shiny dashboard reads saved artifacts instead of retraining models live. This directly responds to the proposal feedback that the project should make the pipeline, retraining, evaluation, and decision-making value more explicit.
 
-For forecasting, we compare three model families: a seasonal naive baseline, a feature-based histogram gradient boosting model, and Prophet. The saved forecasting outputs are generated for the 12 busiest eligible stations by default, while monitoring and planning pages continue to use all 150 stations. This choice keeps the demonstration responsive and computationally feasible, while the code supports an \code{--all-stations} option for full forecasting runs. Model performance is evaluated with three rolling backtest windows, each using a 168-hour test horizon. Based on average WAPE across these backtests, histogram gradient boosting is the best model for 9 of the 12 forecasted stations, seasonal naive is best for 2 stations, and Prophet is best for 1 station. The median WAPE values are 24.97\% for histogram gradient boosting, 30.14\% for seasonal naive, and 38.26\% for Prophet.
+The current processed dataset covers 81 monthly files from August 2019 to April 2026. It contains 5,311,003 hourly station records from 150 stations and 107,385,663 counted cyclists. Data coverage is high overall: mean station coverage is 98.86\% and median station coverage is 99.58\%. Forecasts are generated for all 147 eligible stations that satisfy the minimum history and coverage rules.
 
-The dashboard contains five views: an overview map, station detail analysis, forecasting, planning insights, and ML engineering status. The planning view converts historical demand, peak pressure, recent growth, forecast reliability, and data coverage into an infrastructure priority score. The ML engineering view exposes the generated artifacts, model run status, and re-run commands, making the project reproducible and easier to maintain.
+The dashboard contains five pages: Overview, Station Detail, Forecast, Planning Insights, and ML Engineering. The planning page separates three questions instead of hiding them inside one score: which stations show consistently strengthening demand, which show consistently weakening demand, and which have many unusual daily counts. The ML Engineering page documents the end-to-end pipeline, generated artifacts, run status, and operational commands, making the project reproducible for teammates and assessors.
 
 \section{Problem Context and Objectives}
 
-The Agentschap Wegen en Verkeer (AWV) manages major road and cycling infrastructure in Flanders. Its automatic bicycle counting stations provide a valuable source for understanding how cycling demand changes across locations and over time. This information supports planning decisions such as where to monitor infrastructure pressure, where demand is growing, and where data quality may be too weak to support investment decisions.
+AWV's bicycle counting stations provide a valuable source for understanding cycling demand across fixed locations in Flanders. These stations do not describe every route in the cycling network, but they do provide repeated time series that can support monitoring and planning. The project therefore focuses on station-level decision support rather than individual cyclist routing.
 
-The project is deliberately framed at the station level. The available data describes fixed counting locations rather than the entire cycling network. Therefore, the dashboard should not be interpreted as a live routing or real-time traffic application for cyclists. Instead, its main purpose is to support planning and monitoring questions for infrastructure stakeholders:
+The main project objectives are:
 
 \begin{itemize}
-    \item Which counting stations have the highest bicycle traffic?
-    \item Which stations show strong recent growth or high peak-hour pressure?
-    \item Which stations have sufficiently reliable data for analysis?
-    \item Can short-term hourly demand be forecasted for selected high-traffic stations?
-    \item How can the data and forecasting workflow be rerun when new monthly files are released?
+    \item process large monthly bicycle count files into fast dashboard-ready datasets;
+    \item monitor all processed bicycle counting stations through maps, rankings, and station detail views;
+    \item generate short-term hourly forecasts for eligible stations;
+    \item evaluate models against a strong seasonal baseline using rolling time-based backtests;
+    \item turn recent traffic patterns into planning signals that are easy to explain;
+    \item document how the system can be rerun when new data is released.
 \end{itemize}
 
-These questions also address the feedback received on the project proposal. The initial proposal clearly identified dashboard stakeholders, but the proposed design risked being too limited for planning and too close to a one-off exercise. The implemented system therefore emphasizes three improvements: a repeatable data pipeline, explicit model evaluation and retraining logic, and planning-oriented dashboard indicators.
+The stakeholder value is strongest for infrastructure supervisors and mobility planners. They can use the dashboard to screen locations that deserve further investigation, not to make automatic investment decisions. The dashboard highlights where demand is high, where recent demand is strengthening or weakening, and where data quality or unusual counts may require closer checking.
 
 \section{Data Source and Preprocessing}
 
 \subsection{Input Data}
 
-The AWV dataset consists of monthly count files and metadata files. The count files contain observations such as the station ID, direction, detected object type, start and end time, and count. Since the project focuses on bicycle infrastructure, only records with type \code{FIETSERS} are retained. The \code{sites.csv} metadata file provides station names, municipalities, coordinates, and installation dates. Direction metadata is available in \code{richtingen.csv}, although the current station-level dashboard aggregates directions into total station counts for interpretability.
+The project uses the public AWV bicycle count dataset. The raw source contains monthly count files and metadata files. The monthly count files include station IDs, direction, object type, start and end timestamps, and counts. The station metadata provides names, municipalities, coordinates, and installation-related information.
 
-\begin{table}[h]
+\begin{table}[htbp]
 \centering
+\caption{Main raw data components.}
 \small
 \begin{tabularx}{0.95\textwidth}{lX}
 \toprule
-\textbf{Component} & \textbf{Use in this project} \\
+\textbf{Input} & \textbf{Use in this project} \\
 \midrule
-\code{data-YYYY-MM.csv} & Monthly raw counts; filtered to cyclist records and aggregated to hourly station totals. \\
-\code{sites.csv} & Station metadata, including coordinates, municipality, and station labels. \\
-\code{richtingen.csv} & Direction metadata; used to understand the source structure, while the dashboard currently reports station-level totals. \\
+\code{data-YYYY-MM.csv} & Monthly count files. The pipeline keeps \code{FIETSERS} records and aggregates them to hourly station totals. \\
+\code{sites.csv} & Station names, municipalities, coordinates, and labels used in maps and tables. \\
+\code{richtingen.csv} & Direction metadata. The current dashboard aggregates directions to station totals for clearer planning interpretation. \\
 \bottomrule
 \end{tabularx}
-\caption{Main input files from the AWV bicycle count dataset.}
 \end{table}
 
 \subsection{Preprocessing Pipeline}
 
-The preprocessing script reads all monthly files in chunks to avoid loading the raw CSV dataset into memory at once. The main preprocessing steps are:
+The preprocessing script reads monthly files in chunks to avoid loading the full raw dataset into memory. It filters to cyclist observations, parses timestamps, floors observations to hourly resolution, aggregates by \code{site\_id} and hour, merges station metadata, and creates station-level summaries.
 
-\begin{enumerate}
-    \item Read monthly count files with explicit column names.
-    \item Filter to cyclist observations only.
-    \item Parse timestamps and round observations to hourly level.
-    \item Aggregate counts by \code{site\_id} and hour.
-    \item Merge station-level metadata from \code{sites.csv}.
-    \item Compute station summary features, including average daily traffic, recent growth, peak-hour indicators, and data coverage.
-    \item Store processed data as Parquet and CSV artifacts for fast dashboard loading.
-\end{enumerate}
+The dashboard does not read the raw CSV files directly. Instead, the pipeline writes reusable artifacts to \code{data/processed/}. This separation keeps the dashboard fast and makes the system easier to rerun and debug.
 
-The dashboard does not read the raw CSV files directly. This design keeps the app responsive and separates batch processing from interactive visualization. It also makes the pipeline more reproducible: the raw data, processed data, model outputs, and dashboard each have clear responsibilities.
-
-\begin{table}[h]
+\begin{table}[htbp]
 \centering
+\caption{Current processed dataset summary.}
 \small
 \begin{tabular}{lr}
 \toprule
-\textbf{Pipeline statistic} & \textbf{Value} \\
+\textbf{Processed data statistic} & \textbf{Value} \\
 \midrule
 Monthly files processed & 81 \\
 Date range & 2019-08-01 to 2026-04-30 \\
@@ -150,335 +143,317 @@ Mean station coverage & 98.86\% \\
 Median station coverage & 99.58\% \\
 \bottomrule
 \end{tabular}
-\caption{Processed dataset summary.}
 \end{table}
 
-\subsection{Data Coverage}
-
-Data coverage is computed for each station as:
+Station data coverage is computed as:
 
 \[
 \text{coverage rate} =
 \frac{\text{observed hourly records}}{\text{expected hourly records between first and last observation}}.
 \]
 
-This metric measures whether a station has records for the hours in which it was active. A zero count still counts as observed data; a completely missing hour does not. Coverage is used both as a quality indicator and as a planning safeguard. A station with low coverage may appear to have low demand or unusual growth simply because the sensor was missing records. For this reason, the planning logic flags low-coverage stations for sensor or data quality checks before using them for infrastructure investment decisions.
+A zero count can still be a valid observed hour; coverage measures whether the hour exists in the data, not whether bicycles passed the station. Coverage is used as a quality safeguard, especially for training eligibility and planning trend views.
 
-\section{System Architecture}
+\subsection{Station-Level Features and Quality Safeguards}
 
-The implemented project follows a modular analytics architecture. The main artifacts are stored in \code{data/processed/}, while source scripts are stored in \code{codes/} and the dashboard is stored in \code{app/}. The raw data directory and processed Parquet files are ignored by Git to avoid uploading large data files to GitHub.
+The processed station summary is used by several dashboard pages. It contains descriptive traffic indicators, quality indicators, and metadata. The most important features are average daily traffic, peak hour count, 95th percentile hourly count, active days, data coverage, recent and previous average daily traffic, and station coordinates.
 
-\begin{table}[h]
+Several of these features are deliberately simple. For example, average daily traffic is computed using the number of active days for that station rather than the global number of days in the whole dataset. This is important because stations do not all have the same active history. If a station was installed later, dividing by the full global date range would underestimate its typical daily use.
+
+\begin{table}[htbp]
 \centering
+\caption{Main station-level features and how they support dashboard interpretation.}
 \small
-\begin{tabularx}{0.95\textwidth}{lX}
+\begin{tabularx}{0.96\textwidth}{lX}
+\toprule
+\textbf{Feature} & \textbf{Interpretation in the dashboard} \\
+\midrule
+Average daily traffic & Typical daily demand for a station over the selected period, using station-specific active days. \\
+Peak hour count & The maximum observed hourly count for the selected station and period. \\
+95th percentile hourly count & A robust high-demand indicator that is less sensitive than the single maximum. \\
+Coverage rate & Completeness of hourly observations between a station's first and last observed hour. \\
+Moving averages & 1-week, 2-week, and 4-week average daily counts used for trend screening. \\
+Robust weekday baseline & Median and MAD-based scale by station and weekday, used for daily outlier detection. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The quality safeguards are intentionally visible rather than hidden. Low coverage can affect growth, decline, and forecast reliability. For this reason, the forecasting pipeline requires sufficient historical coverage and active days, while the planning trend view requires recent 4-week coverage of at least 80\%. This does not remove all possible data issues, but it prevents the most obvious missing-data cases from being presented as strong planning signals.
+
+\section{System Architecture and Reproducibility}
+
+The project is organized around a repeatable pipeline. The raw data folder and generated artifacts are not uploaded to GitHub because they are large and reproducible. Source code, report files, configuration, and documentation remain version-controlled.
+
+\begin{table}[htbp]
+\centering
+\caption{Generated artifacts consumed by the dashboard.}
+\small
+\begin{tabularx}{0.96\textwidth}{lX}
 \toprule
 \textbf{Artifact} & \textbf{Role} \\
 \midrule
-\code{hourly\_counts.parquet} & Hourly station-level cyclist counts used by dashboard views. \\
-\code{station\_summary.parquet} & Station-level features, metadata, coverage, growth, and planning indicators. \\
+\code{hourly\_counts.parquet} & Hourly station-level cyclist counts used by all dashboard pages. \\
+\code{station\_summary.parquet} & Station metadata, coverage, average traffic, and summary statistics. \\
 \code{model\_evaluation.csv} & Average model metrics across rolling backtest windows. \\
 \code{model\_backtest\_windows.csv} & Detailed per-window model evaluation results. \\
-\code{forecast\_outputs.parquet} & Saved future hourly forecasts for trained stations. \\
+\code{forecast\_outputs.parquet} & Saved 168-hour future forecasts for trained stations. \\
 \code{pipeline\_run\_summary.json} & Metadata for preprocessing runs. \\
 \code{forecast\_run\_summary.json} & Metadata for forecast training and evaluation runs. \\
-\code{pipeline\_orchestration.json} & Metadata for the one-command pipeline runner. \\
+\code{pipeline\_orchestration.json} & Metadata for one-command pipeline execution. \\
 \bottomrule
 \end{tabularx}
-\caption{Generated artifacts consumed by the dashboard.}
 \end{table}
 
-The full workflow can be summarized as a sequence of reproducible stages:
+The end-to-end flow is:
 
 \begin{center}
 \small
-\begin{tabularx}{0.92\textwidth}{>{\centering\arraybackslash}X>{\centering\arraybackslash}X>{\centering\arraybackslash}X>{\centering\arraybackslash}X}
+\begin{tabularx}{0.96\textwidth}{>{\centering\arraybackslash}X>{\centering\arraybackslash}X>{\centering\arraybackslash}X>{\centering\arraybackslash}X}
 \toprule
-Raw CSV files & Processed Parquet & Backtest metrics & Shiny dashboard \\
+Ingest raw data & Build features & Train and validate & Serve dashboard \\
 \midrule
-Monthly AWV counts & Hourly station features & Model evaluation and forecasts & Monitoring, forecasting, and planning views \\
+Monthly AWV CSV files & Hourly counts and station summaries & Rolling backtests and forecasts & Shiny reads saved artifacts \\
 \bottomrule
 \end{tabularx}
 \end{center}
 
-The orchestration script \code{codes/run\_pipeline.py} allows the pipeline to be rerun from the command line. For example, the command \code{python codes/run\_pipeline.py --skip-preprocess --top-stations 12 --backtest-windows 3} retrains and evaluates the forecasting models without rebuilding the processed dataset. This is important because the source data is updated monthly, and a realistic analytics system should support periodic refreshes.
+The command-line runner \code{codes/run\_pipeline.py} supports both full refreshes and forecast-only refreshes. This is important because AWV releases new monthly data over time. The current development workflow runs locally with Python dependencies from \code{requirements.txt}. A Dockerfile is included for reproducibility and future deployment, but Docker is not required to run the current project locally.
 
-\section{Implementation and Course Alignment}
+\subsection{Collaboration and Local Execution}
 
-The implementation was designed to reflect the main themes of the Modern Data Analytics course rather than only producing an attractive dashboard. The project combines Python data processing, machine learning pipelines, dashboarding, versioning, container readiness, and analytics infrastructure thinking.
+The project is designed so teammates can reproduce it without committing large data files to GitHub. The repository contains the source code, dashboard, report, dependency file, and documentation. The raw data folder \code{fietstellingen\_csv/} and the generated \code{data/processed/} artifacts are intentionally excluded through \code{.gitignore}. This keeps the GitHub repository lightweight and avoids uploading large reproducible data files.
 
-\begin{table}[h]
+There are two practical ways for a teammate to run the project. If they have the raw AWV CSV files, they can place \code{fietstellingen\_csv/} in the project root and run the full pipeline. If they receive the processed artifacts separately, they can place \code{data/processed/} in the project root and start the dashboard directly. The second option is faster for demonstration, while the first option is more reproducible.
+
+\subsection{Course Alignment}
+
+The implementation connects several parts of the Modern Data Analytics course. The goal was not only to build a visual dashboard, but to show how data processing, modeling, dashboarding, versioning, and infrastructure thinking fit together.
+
+\begin{table}[htbp]
 \centering
+\caption{Relationship between course concepts and the final project.}
 \small
 \begin{tabularx}{0.96\textwidth}{lX}
 \toprule
-\textbf{Course theme} & \textbf{How it appears in the project} \\
+\textbf{Course topic} & \textbf{How it appears in the project} \\
 \midrule
-Python fundamentals & The pipeline is structured as reusable scripts with functions for preprocessing, model training, evaluation, and orchestration. \\
-Data science packages & Pandas is used for chunked CSV ingestion, time parsing, aggregation, feature engineering, and metric computation. \\
-Data science algorithms & The dashboard uses ranking, growth calculations, coverage metrics, percentile scores, and forecasting model comparisons. \\
-Scikit-learn pipelines & Histogram gradient boosting is implemented as a scikit-learn pipeline with imputation and engineered temporal features. \\
-Dashboarding in Python & Shiny for Python and Plotly are used to build interactive maps, time-series views, forecast views, and data tables. \\
-Code collaboration and versioning & Large raw and generated data files are excluded through \code{.gitignore}, while source scripts and configuration files remain versionable. \\
-Containerisation & A Dockerfile and \code{.dockerignore} are included so the dashboard can be containerized after processed data is mounted. \\
-Analytics infrastructure & The ML Engineering page exposes pipeline status, generated artifacts, and re-run commands for operational transparency. \\
+Python and packages & Pandas, NumPy, Plotly, Shiny, and scikit-learn are used in a structured Python project. \\
+Data science algorithms & Aggregation, ranking, moving averages, robust outlier detection, and forecast metrics are implemented. \\
+Scikit-learn pipelines & Histogram gradient boosting is wrapped with median imputation and engineered time-series features. \\
+Dashboarding in Python & Shiny for Python provides interactive pages, station selection, tables, maps, and plots. \\
+Code collaboration & GitHub tracks code and documentation, while \code{.gitignore} protects large data artifacts. \\
+Containerisation and cloud & Docker support is prepared, and the forecast step can later be moved to scheduled cloud jobs. \\
+Analytics infrastructure & The ML Engineering page exposes pipeline stages, artifacts, run status, and re-run commands. \\
 \bottomrule
 \end{tabularx}
-\caption{Relationship between course concepts and project implementation.}
 \end{table}
 
-This alignment is important because the project is not only evaluated as a data analysis exercise. It should also demonstrate an understanding of how a data product can be organized, rerun, and maintained. For that reason, the project includes both user-facing functionality and engineering-facing transparency.
-
-\subsection{Design Decisions}
-
-Several design decisions were made to keep the system robust:
-
-\begin{itemize}
-    \item \textbf{Hourly aggregation}: the original data is often at 15-minute resolution, but hourly data is easier to model, faster to visualize, and sufficient for short-term planning.
-    \item \textbf{Station-level totals}: directions are aggregated so that the dashboard answers station-level planning questions rather than direction-specific traffic questions.
-    \item \textbf{Parquet storage}: processed tables are stored in Parquet because they load much faster than repeatedly parsing large CSV files.
-    \item \textbf{Default forecast subset}: all stations are monitored, but the default forecast pipeline trains on the 12 busiest eligible stations to keep model training practical during development and presentation.
-    \item \textbf{Explicit artifacts}: model metrics, forecast outputs, and pipeline summaries are saved as files so that the dashboard consumes stable outputs rather than retraining models interactively.
-\end{itemize}
-
-\section{Forecasting Methodology}
+\section{Forecasting Methodology and Results}
 
 \subsection{Forecasting Task}
 
-The forecasting task is short-term station-level prediction. For a selected station, the system predicts future bicycle counts at hourly resolution. The dashboard allows the user to view either the next 24 hours or the next 168 hours. The underlying saved forecast artifact is generated for 168 hours, equivalent to seven days of hourly predictions.
+The forecasting task is short-term hourly prediction at station level. For a selected station, the dashboard can show the next 24 hours or the next 7 days hourly. The saved forecast artifact contains 168 hours, so the 24-hour view is a filtered view of the same forecast output.
 
-The default saved forecasts are trained for the 12 busiest eligible stations. This is a practical design choice: all 150 stations are used in the monitoring and planning views, but model training is more computationally expensive, especially for Prophet. The code supports \code{--all-stations} for complete forecast coverage, but the default dashboard demo focuses on the highest-demand stations to keep training time manageable.
+Forecasts are generated for all 147 eligible stations. A station is eligible if it satisfies the minimum data coverage rule and has enough active days for training. The remaining stations are still available in monitoring pages, but they are not used for saved forecast outputs because their history or quality is insufficient.
 
-\subsection{Candidate Models}
+\subsection{Models and Features}
 
-Three forecasting approaches are compared:
-
-\begin{itemize}
-    \item \textbf{Seasonal naive baseline}: predicts using the same hour from the previous week, with fallback values based on hour-of-week medians.
-    \item \textbf{Histogram gradient boosting}: a feature-based scikit-learn model using calendar features, lag features, and rolling statistics.
-    \item \textbf{Prophet}: a time-series model with daily, weekly, and yearly seasonality where enough history is available.
-\end{itemize}
-
-The seasonal naive model is essential because cycling counts are strongly periodic. A more complex model only adds value if it can beat this simple weekly-pattern baseline. Histogram gradient boosting represents a flexible machine learning approach for tabular time features. Prophet represents a more classical time-series approach for trend and seasonality.
-
-\subsection{Feature Engineering}
-
-The histogram gradient boosting model uses only information available from the bicycle count history. This avoids the complexity and reliability risks of adding external weather or holiday sources at this stage. The engineered features include:
+The forecasting pipeline compares two models:
 
 \begin{itemize}
-    \item cyclic hour-of-day features using sine and cosine transformations;
-    \item cyclic weekday features to capture weekly commuting and leisure patterns;
-    \item cyclic month features to capture broad seasonal variation;
-    \item a weekend indicator;
-    \item lag features at 1 hour, 24 hours, and 168 hours;
-    \item rolling means over the previous 24 and 168 hours;
-    \item a rolling 24-hour standard deviation to capture short-term volatility.
+    \item \textbf{Seasonal naive}: predicts a future hour using the same hour from the previous week, with fallback hour-of-week medians.
+    \item \textbf{Histogram gradient boosting}: a scikit-learn model using calendar features, lag features, and rolling statistics.
 \end{itemize}
 
-The 168-hour lag is especially important because the seasonal naive baseline is strong. By giving the machine learning model access to weekly lag information, the comparison is fairer: the machine learning model is not asked to rediscover weekly seasonality from calendar features alone. Missing lag values are handled through median imputation inside the scikit-learn pipeline.
+The machine learning model uses only internal count history. This keeps the project lightweight and avoids the extra reliability risks of external data such as weather, holidays, or road works. The engineered features include cyclic hour, weekday, and month features; a weekend indicator; lags at 1, 24, and 168 hours; rolling means over 24 and 168 hours; and rolling 24-hour standard deviation.
 
-\subsection{Rolling Backtest Evaluation}
+\begin{table}[htbp]
+\centering
+\caption{Rationale for the current forecasting design.}
+\small
+\begin{tabularx}{0.96\textwidth}{lX}
+\toprule
+\textbf{Modeling choice} & \textbf{Reason} \\
+\midrule
+Seasonal naive baseline & Weekly cycling patterns are strong, so a simple previous-week baseline is hard to beat and gives a fair reference. \\
+Histogram gradient boosting & Captures nonlinear relationships between calendar features, recent lags, and rolling statistics without heavy dependencies. \\
+No external weather data yet & Keeps the first system reliable and reproducible; external sources can be added once the internal pipeline is stable. \\
+Per-station training & Stations differ in volume and behavior, so each station receives its own model evaluation and best-model decision. \\
+\bottomrule
+\end{tabularx}
+\end{table}
 
-Instead of evaluating only the last week once, the implemented pipeline uses rolling backtests. Each model is evaluated over three historical windows. Each window uses the latest available training history before the test period and predicts a 168-hour test horizon. The three windows are spaced 168 hours apart, so each window corresponds to a different held-out week.
+\subsection{Rolling Backtests}
 
-For each station and model, the metrics are averaged across the rolling windows. The final reported metrics are MAE, RMSE, and WAPE:
+The evaluation uses three rolling backtest windows. Each window trains on the latest available history before the test period and evaluates a 168-hour held-out week. The windows are spaced 168 hours apart. The current training window length is 728 days. Metrics are averaged per station and model.
+
+The main evaluation metric is WAPE:
 
 \[
 \text{WAPE} =
 \frac{\sum_t |y_t - \hat{y}_t|}{\sum_t y_t} \times 100.
 \]
 
-WAPE is especially useful for this project because it scales absolute error by total observed demand. This makes it easier to compare stations with different traffic volumes.
+WAPE is useful because it scales absolute error by total observed demand. However, very low-volume stations can produce extreme WAPE values, so medians and interquartile ranges are more informative than means for the all-station run.
 
-After evaluation, the system retrains models using the latest available history and generates future 168-hour forecasts. This separates model evaluation from future prediction: the backtests estimate expected performance, while the final forecast uses the most recent data.
+This setup avoids random cross-validation because the data is time ordered. Random folds would leak future observations into training and make the forecast evaluation too optimistic. Rolling backtests are more appropriate because each test week is predicted using only historical data that would have been available at that time.
 
-\subsection{Model Selection Policy}
+\subsection{Current Forecast Results}
 
-The dashboard does not assume one global best model for every station. Instead, it selects the best model per station based on average WAPE across the rolling backtests. This is appropriate because bicycle count stations differ in volume, regularity, local context, and sensor behavior. A station with a very stable weekly pattern may be best served by the seasonal naive baseline, while a station with nonlinear interactions between weekday, hour, and recent demand may benefit from histogram gradient boosting.
+The latest forecast run uses 147 eligible stations, 2 candidate models, 3 rolling backtest windows, and a 168-hour forecast horizon. It produces 882 detailed backtest rows, 294 aggregated evaluation rows, and 49,392 forecast rows.
 
-This policy also helps make the forecasting results interpretable. The model comparison table shows whether a candidate model improves on the seasonal naive baseline. If the baseline wins, that is not a failure; it means the weekly pattern is strong enough that a simple model is hard to beat. In a planning context, this honesty is valuable because it prevents overclaiming the performance of complex models.
-
-\section{Forecasting Results}
-
-The current run evaluates 12 selected stations, 3 models, and 3 rolling backtest windows. This produces 108 detailed backtest rows and 36 aggregated model evaluation rows. The future forecast artifact contains 6,048 rows, corresponding to 12 stations, 3 models, and 168 forecast hours.
-
-\begin{table}[h]
+\begin{table}[htbp]
 \centering
+\caption{Forecast model performance across the 147 eligible stations.}
 \small
-\begin{tabular}{lrrrr}
+\begin{tabular}{lrrr}
 \toprule
-\textbf{Model} & \textbf{Mean WAPE} & \textbf{Median WAPE} & \textbf{Min WAPE} & \textbf{Max WAPE} \\
+\textbf{Model} & \textbf{Median WAPE} & \textbf{IQR WAPE} & \textbf{Best for stations} \\
 \midrule
-Histogram gradient boosting & 29.51 & 24.97 & 20.75 & 51.21 \\
-Seasonal naive & 30.93 & 30.14 & 22.95 & 44.78 \\
-Prophet & 38.37 & 38.26 & 31.95 & 46.01 \\
+Histogram gradient boosting & 34.16\% & 28.89--40.92\% & 129 \\
+Seasonal naive & 39.85\% & 33.92--44.89\% & 18 \\
 \bottomrule
 \end{tabular}
-\caption{Model performance across selected forecast stations, averaged over rolling backtests.}
 \end{table}
 
-Histogram gradient boosting is the best-performing model for 9 of the 12 forecasted stations. Seasonal naive remains best for 2 stations, and Prophet is best for 1 station. This result is important because it demonstrates the value of model comparison rather than assuming that a more complex model is automatically better. Prophet is useful to include as a time-series reference, but in this dataset it does not consistently outperform the simpler baseline or the feature-based machine learning model.
-
-\begin{table}[h]
-\centering
-\small
-\begin{tabular}{lr}
-\toprule
-\textbf{Best model by station} & \textbf{Number of stations} \\
-\midrule
-Histogram gradient boosting & 9 \\
-Seasonal naive & 2 \\
-Prophet & 1 \\
-\bottomrule
-\end{tabular}
-\caption{Best model counts based on average WAPE.}
-\end{table}
-
-The model results also show that the baseline is strong. This is expected for bicycle traffic because weekly patterns are often stable. The added value of histogram gradient boosting appears when nonlinear combinations of hour, weekday, month, recent lag values, and rolling averages improve the forecast. In contrast, Prophet tends to smooth the data and may underperform when station-level traffic has local irregularities or sharp short-term patterns.
+Histogram gradient boosting is the best model for most eligible stations, but the seasonal naive baseline still wins for 18 stations. This confirms that the baseline is meaningful: bicycle traffic often follows a strong weekly pattern, and a more complex model should only be preferred when it improves on that pattern. The dashboard therefore selects the best model per station based on average WAPE rather than assuming one universal best model.
 
 \section{Dashboard Design}
 
-The final dashboard is implemented with Shiny for Python and Plotly. It is organized into five pages, each corresponding to a different decision or monitoring task.
+The dashboard is implemented with Shiny for Python and Plotly. It contains five pages that move from monitoring to station analysis, forecasting, planning signals, and engineering transparency.
+
+\begin{table}[htbp]
+\centering
+\caption{Dashboard pages and their decision-support role.}
+\small
+\begin{tabularx}{0.96\textwidth}{lX}
+\toprule
+\textbf{Dashboard page} & \textbf{Main question answered} \\
+\midrule
+Overview & Where are the stations and which locations have the highest average daily traffic? \\
+Station Detail & What is the historical pattern of one selected station? \\
+Forecast & What are the expected hourly counts for the next 24 hours or 7 days, and how reliable are the models? \\
+Planning Insights & Which stations show strengthening demand, weakening demand, or unusual recent daily counts? \\
+ML Engineering & How were the data, models, forecasts, and dashboard artifacts produced and how can they be rerun? \\
+\bottomrule
+\end{tabularx}
+\end{table}
 
 \subsection{Overview}
 
-The overview page provides a spatial and temporal summary of bicycle traffic. Users can choose a date range and inspect the number of active stations, hourly rows, and total cyclist counts in that period. A map displays station locations, with marker size and color linked to average daily traffic. Ranking tables show the highest average daily traffic and the fastest recent growth.
-
-This view is useful for identifying important stations and understanding the geographic distribution of cycling demand. It also gives a first indication of where planners may want to investigate further.
+The Overview page summarizes the full processed dataset for a selected date range. It shows the number of stations, hourly rows, total cyclists, a station map, and a ranking of highest average daily traffic. The map marker size and color use the same definition as the ranking table: total count divided by the number of active days for that station in the selected period. This avoids misleading comparisons when stations have different active histories.
 
 \subsection{Station Detail}
 
-The station detail page focuses on one selected station. It shows average daily traffic, peak hour count, data coverage, daily traffic over time, average hourly patterns, and weekday profiles. This page supports exploratory analysis of local temporal patterns, such as morning and evening peaks or weekday-weekend differences.
+The Station Detail page focuses on one selected station. It reports average daily traffic, peak hour count, and data coverage. It also shows three plots: daily traffic over time, average pattern by hour of day, and weekday profile. These views help planners understand whether a station is mainly commuter-oriented, weekend-oriented, seasonal, or affected by missing data.
 
 \subsection{Forecast}
 
-The forecasting page shows recent historical counts and saved future forecasts. The user can select a forecast horizon of 24 or 168 hours. The page reports model metrics from rolling backtests, the best model for the selected station, and whether candidate models improve over the seasonal naive baseline. A forecast scope card explains that monitoring uses all 150 stations, while saved advanced forecasts are currently trained for the selected 12 stations by default.
+The Forecast page shows saved future forecasts for the selected station. It includes three value boxes: baseline WAPE, best ML WAPE, and best model. The main plot combines recent history with seasonal naive and histogram gradient boosting forecasts. A rolling-backtest table reports MAE, RMSE, WAPE, number of backtest windows, and test period. The scope and interpretation text at the bottom explains that monitoring uses all 150 stations while saved forecasts currently cover all 147 eligible stations.
 
 \subsection{Planning Insights}
 
-The planning page converts descriptive statistics and model outputs into planning-oriented indicators. The main feature is an infrastructure priority shortlist. The priority score is defined as:
+The Planning Insights page separates planning signals into three focused views so that planners can inspect one question at a time.
 
-\[
-\text{Priority} = 0.35D + 0.25P + 0.20G + 0.10R + 0.10C,
-\]
+\begin{itemize}
+    \item \textbf{Fast Growth}: uses \(\text{ma\_1w} > \text{ma\_2w} > \text{ma\_4w}\), signaling strengthening demand.
+    \item \textbf{Fast Decline}: uses \(\text{ma\_1w} < \text{ma\_2w} < \text{ma\_4w}\), signaling weakening demand.
+    \item \textbf{Daily Outliers}: flags unusual daily counts against each station's own same-weekday history.
+\end{itemize}
 
-where \(D\) is demand, \(P\) is peak pressure, \(G\) is recent growth, \(R\) is forecast reliability, and \(C\) is data coverage. These components are percentile-based or normalized indicators, so the score is designed for ranking and screening rather than direct cost-benefit analysis.
+The moving-average rules are inspired by the idea of bullish and bearish moving-average alignment in financial charts, but they are used here only as monitoring signals. The 1-week, 2-week, and 4-week average daily counts make the trend easy to inspect directly from the table. In the latest run, 127 stations satisfy the fast-growth alignment and 3 stations satisfy the stricter fast-decline alignment.
 
-The dashboard also generates planning recommendations. For example, low-coverage stations are flagged for data quality checks, high-priority and high-growth stations are marked as capacity upgrade candidates, and high-demand stations are flagged for comfort and capacity review. This directly supports the planning use case described in the project information.
+The Daily Outliers tab uses robust weekday-specific statistics. For each station and weekday, the system estimates a historical median and a MAD-based robust scale. A day is marked as an outlier when its absolute robust z-score exceeds 2.576, corresponding to a two-sided 99\% cutoff under a normal approximation. The table ranks stations by the number of outlier days in the latest four weeks.
 
-\begin{table}[h]
+\begin{table}[htbp]
 \centering
+\caption{Examples of planning signals produced by the current dashboard.}
 \scriptsize
-\begin{tabularx}{0.98\textwidth}{lrrX}
+\begin{tabularx}{0.98\textwidth}{lrrrX}
 \toprule
-\textbf{Station} & \textbf{Priority} & \textbf{Coverage} & \textbf{Recommendation} \\
+\textbf{Signal} & \textbf{Example station} & \textbf{MA 1w} & \textbf{MA 4w} & \textbf{Interpretation} \\
 \midrule
-Nieuwpoort teller 1 & 88.69 & 1.00 & Capacity upgrade candidate: high use and recent growth \\
-Herent teller 2 & 88.46 & 1.00 & Capacity upgrade candidate: high use and recent growth \\
-Herentals totem & 86.92 & 1.00 & Capacity upgrade candidate: high use and recent growth \\
-Nieuwpoort totem & 86.32 & 1.00 & Capacity upgrade candidate: high use and recent growth \\
-As & 85.79 & 1.00 & Capacity upgrade candidate: high use and recent growth \\
-Leuven totem & 83.16 & 1.00 & Capacity upgrade candidate: high use and recent growth \\
+Fast Growth & Bertem & 293.71 & 186.46 & Short-term demand is clearly above the broader 4-week level. \\
+Fast Growth & Bree & 969.14 & 667.43 & Recent demand is strengthening relative to the recent month. \\
+Fast Decline & Tienen 2 & 0.43 & 413.36 & Very strong decline signal; should be checked for context or sensor issues. \\
+Daily Outliers & Tervuren & -- & -- & 18 outlier days in the latest four weeks under the 99\% robust cutoff. \\
 \bottomrule
 \end{tabularx}
-\caption{Example top planning priority stations from the current run.}
 \end{table}
+
+These signals are intentionally separated. Combining them into one score would make the dashboard harder to explain because high growth, low coverage, and outlier behavior mean different things. A planner can first inspect growth, then decline, then unusual days, and decide which interpretation is most relevant for the local context.
 
 \subsection{ML Engineering}
 
-The ML engineering page makes the system transparent. It shows the number of processed rows, trained models, forecast horizon, pipeline status, generated artifacts, and re-run commands. This page is intentionally included to demonstrate that the project is not just an interactive visualization. It documents the operational workflow from raw data to processed features, model evaluation, forecast outputs, and dashboard consumption.
+The ML Engineering page makes the system transparent. It starts with an end-to-end pipeline view: ingest raw data, build features, train and validate, and serve the dashboard. It then shows processed rows, forecast station coverage, backtest windows, and forecast horizon. The run-status table checks preprocessing, forecast training, orchestration, and dashboard serving. The artifact table groups outputs into features, model validation, forecast serving, and run metadata. Finally, operational commands show how to rerun the full pipeline, retrain forecasts only, or launch the dashboard.
 
-\subsection{Demonstration Flow}
+This page is included because it makes the engineering work visible. Without it, the dashboard could look like a collection of plots. With it, the user can see which artifacts exist, when the pipeline was last run, how many stations were forecasted, and which commands regenerate the outputs. This is especially useful for a course project because it demonstrates that the system can be maintained and extended after the first submission.
 
-For presentation, the dashboard should be demonstrated in a fixed order. The recommended flow is:
+\section{Response to Feedback and Course Alignment}
 
-\begin{enumerate}
-    \item \textbf{Overview}: introduce the spatial map, date range, total cyclist counts, high-demand stations, and recent growth.
-    \item \textbf{Station Detail}: select one busy station and explain daily trends, hourly patterns, weekday profiles, and data coverage.
-    \item \textbf{Forecast}: show the forecast scope, model comparison, rolling backtest metrics, and 24-hour versus 168-hour forecast horizons.
-    \item \textbf{Planning Insights}: explain the priority score, recommendation labels, high-demand stations, peak pressure stations, growth signals, and data quality risks.
-    \item \textbf{ML Engineering}: close by showing the generated artifacts and re-run commands, emphasizing that the dashboard is backed by a repeatable pipeline.
-\end{enumerate}
+The proposal feedback asked for a stronger ML engineering component and clearer decision-making value for the dashboard. The final implementation addresses this in several ways.
 
-This flow is designed to move from descriptive monitoring to predictive modeling and then to operational transparency. It also helps communicate the project as a complete analytics system instead of a collection of unrelated plots.
-
-\section{Discussion}
-
-The project improves on the original proposal in several ways. First, it implements Parquet-based preprocessing and separates raw data ingestion from dashboard serving. Second, it extends the original baseline-versus-Prophet plan by adding a feature-based machine learning model. Third, it uses rolling backtests rather than a single train-test split. Fourth, it adds planning-oriented indicators that translate data patterns into actionable signals for infrastructure managers.
-
-The results also highlight an important lesson: more complex models are not always better. The seasonal naive baseline is competitive because weekly cycling patterns are strong. Prophet is interpretable and useful as a time-series benchmark, but it does not consistently win in this dataset. Histogram gradient boosting performs best for most forecasted stations, suggesting that nonlinear tabular features are useful for short-term station-level bicycle count forecasting.
-
-The dashboard's planning indicators should be interpreted as screening tools. A high priority score does not automatically mean that infrastructure should be built or expanded. It means that the station deserves closer investigation because it combines high demand, peak pressure, recent growth, reliable forecasts, or good data coverage. Similarly, a low data coverage warning does not mean a location is unimportant; it means the evidence is not reliable enough for immediate planning conclusions.
-
-\subsection{Response to Proposal Feedback}
-
-The teaching feedback emphasized that the initial dashboard idea was too limited for infrastructure planning and that the project risked becoming a one-off exercise. Table~\ref{tab:feedback} summarizes how the implemented version addresses these concerns.
-
-\begin{table}[h]
+\begin{table}[H]
 \centering
+\caption{How the implementation responds to proposal feedback.}
 \small
 \begin{tabularx}{0.96\textwidth}{lX}
 \toprule
 \textbf{Feedback point} & \textbf{Implemented response} \\
 \midrule
-Dashboard too limited for infrastructure planning & Added Planning Insights with demand, peak pressure, growth, coverage, forecast reliability, priority scores, and recommendation labels. \\
-Risk of one-off analysis & Added preprocessing, forecast training, orchestration scripts, JSON run summaries, and generated artifacts consumed by the dashboard. \\
-Need clearer retraining and evaluation over time & Added rolling backtests and command-line pipeline refreshes for monthly data updates. \\
-Baseline versus Prophet too standard & Added histogram gradient boosting as a feature-based scikit-learn model and compared all models against the seasonal naive baseline. \\
-Need stronger decision-making value & Added infrastructure priority shortlist and interpretation logic that distinguishes capacity candidates, growth signals, peak pressure, and data quality checks. \\
+Dashboard too limited for infrastructure planning & Added separate fast-growth, fast-decline, and daily-outlier planning views. \\
+Risk of one-off analysis & Added preprocessing, forecast training, orchestration scripts, saved artifacts, and run metadata. \\
+Need retraining and evaluation over time & Added rolling backtests and commands for monthly refreshes. \\
+Forecasting setup too standard & Compared a strong seasonal naive baseline with histogram gradient boosting and selected the best model per station. \\
+Need explicit decision-making value & Used interpretable moving-average rules and robust same-weekday outlier detection as planning screening tools. \\
 \bottomrule
 \end{tabularx}
-\caption{How the current implementation responds to the proposal feedback.}
-\label{tab:feedback}
 \end{table}
+
+The project also connects directly to the Modern Data Analytics course. Python and pandas are used for data processing, scikit-learn is used for feature-based forecasting, Shiny for Python is used for dashboarding, GitHub is used for collaboration and versioning, and the Dockerfile prepares the project for standardized execution even though local development remains the main workflow.
 
 \section{Limitations and Future Work}
 
-The current system has several limitations. First, saved advanced forecasts are generated for the 12 busiest eligible stations by default. This is sufficient for a responsive demonstration, but a full production deployment should run forecasts for all eligible stations or allow scheduled background training. The \code{--all-stations} option already supports this extension.
+The dashboard should be interpreted as a screening and monitoring tool. It highlights stations that deserve attention, but it does not prove causal explanations. For example, fast growth may be caused by seasonality, infrastructure changes, weather, events, or actual demand shifts. Similarly, a daily outlier signal means the count is unusual relative to the station's same-weekday history, but it does not automatically mean the sensor is broken.
 
-Second, the model uses only historical bicycle count data. Weather, holidays, school vacation periods, road works, and local events may explain additional variation. These external data sources could improve forecasting and planning interpretation, but they would also introduce new data engineering challenges such as time alignment, missing values, and source reliability. For the current version, we prioritize a robust and reproducible internal-data pipeline.
+The current forecasting model uses only historical bicycle counts. Weather, holidays, school vacation periods, road works, and local events may improve forecasting, but they would also add data integration and maintenance complexity. For the current course project, the priority is a reliable internal-data pipeline.
 
-Third, the priority score is a heuristic ranking formula. Its weights are chosen to reflect planning intuition: demand and peak pressure are most important, growth indicates emerging needs, forecast reliability supports short-term monitoring, and coverage protects against poor data quality. In a real policy setting, these weights should be validated with domain experts and possibly adapted by municipality or infrastructure type.
+The all-station forecast run is already implemented locally. If future models become heavier, the forecast training step can be moved to cloud infrastructure. A realistic production setup would store raw and processed data in S3, run scheduled containerized training jobs on EC2 or AWS Batch, and write forecast artifacts back to shared storage for the dashboard to consume.
 
-Fourth, the Dockerfile has been prepared but could not be fully verified on the current machine because the Docker CLI was not available during the latest project check. Therefore, the correct claim is that the project is container-ready, not that it has been fully container-tested. A future deployment could install Docker Desktop, build the image, mount \code{data/processed/}, and schedule monthly pipeline refreshes when AWV releases new CSV files.
-
-Finally, the current GitHub-ready structure separates source code, report files, dashboard files, and generated artifacts. The large raw data folder and processed Parquet outputs are ignored by Git. This keeps the repository lightweight while allowing results to be regenerated from the documented pipeline commands.
+Docker support is prepared through a Dockerfile and \code{.dockerignore}, but Docker is not required for the current team workflow. The practical current workflow is: clone the GitHub repository, obtain raw or processed data separately, install dependencies from \code{requirements.txt}, rerun the pipeline if needed, and start the Shiny dashboard. Docker should be treated as a reproducibility and future deployment option, not as a requirement for local use.
 
 \section{Conclusion}
 
-This project delivers a working station-level bicycle traffic monitoring, forecasting, and planning-support dashboard for Flanders. It processes more than 5.3 million hourly station records from 150 stations, trains and evaluates short-term forecasting models for selected high-demand stations, and exposes the full workflow through a Shiny dashboard.
+This project delivers a working station-level bicycle traffic monitoring and forecasting dashboard backed by a reproducible data and ML pipeline. It processes more than 5.3 million hourly records from 150 stations, generates saved forecasts for 147 eligible stations, compares a strong seasonal naive baseline with histogram gradient boosting, and exposes planning signals through an interactive Shiny dashboard.
 
-The most important contribution is not only the dashboard interface, but the complete analytics workflow behind it. The system supports ingestion, preprocessing, artifact storage, rolling model evaluation, future forecast generation, and transparent dashboard reporting. This makes the project closer to a modern data analytics system than a one-off analysis.
-
-From a planning perspective, the dashboard helps identify high-demand stations, peak pressure points, fast growth locations, data quality risks, and predictable stations. From an ML engineering perspective, it demonstrates repeatable pipelines, baseline comparison, rolling backtesting, and model selection based on WAPE. These elements directly address the proposal feedback and align with the Modern Data Analytics course themes of Python data science, machine learning pipelines, dashboarding, versioning, and analytics infrastructure.
+The main contribution is the combination of dashboarding and ML engineering. The dashboard is not only a visualization layer; it is supported by preprocessing scripts, Parquet artifacts, rolling backtests, forecast outputs, run metadata, and operational commands. This makes the project closer to a maintainable analytics system than to a one-time analysis, and it directly reflects the Modern Data Analytics themes of Python data science, machine learning pipelines, dashboarding, reproducibility, and analytics infrastructure.
 
 \clearpage
 \appendix
 \section{Reproducibility Commands}
 
-The processed data and model artifacts are ignored by Git, but they can be regenerated locally from the downloaded raw CSV files.
+The raw data folder \code{fietstellingen\_csv/} and generated \code{data/processed/} files are ignored by Git. They can be regenerated locally from the downloaded AWV CSV files.
 
 \begin{verbatim}
+# Full refresh from raw CSV files
 python codes/run_pipeline.py \
   --start-month 2019-08 \
   --end-month 2026-04 \
-  --top-stations 12 \
+  --all-stations \
   --backtest-windows 3
 \end{verbatim}
 
-If processed Parquet files already exist and only forecast artifacts need to be refreshed:
-
 \begin{verbatim}
+# Forecast-only refresh if processed data already exists
 python codes/run_pipeline.py \
   --skip-preprocess \
-  --top-stations 12 \
+  --all-stations \
   --backtest-windows 3
 \end{verbatim}
 
-To run the dashboard locally:
-
 \begin{verbatim}
-shiny run --host 127.0.0.1 --port 8000 app/app.py
+# Run the dashboard locally
+shiny run --host 127.0.0.1 --port 8000 --launch-browser app/app.py
 \end{verbatim}
 
 \section{Main Project Files}
@@ -492,26 +467,25 @@ shiny run --host 127.0.0.1 --port 8000 app/app.py
 \code{codes/run\_pipeline.py} & Orchestrates preprocessing and forecast training. \\
 \code{app/app.py} & Shiny dashboard application. \\
 \code{app/www/styles.css} & Dashboard styling. \\
-\code{Dockerfile} & Container definition for the dashboard. \\
-\code{DASHBOARD\_README.md} & Local running instructions. \\
+\code{requirements.txt} & Python dependencies for local execution. \\
+\code{Dockerfile} & Optional container definition for future reproducibility or deployment. \\
+\code{README.md} & Main setup and running instructions. \\
 \bottomrule
 \end{tabularx}
 
 \section{Dashboard Demonstration Checklist}
 
 \begin{enumerate}
-    \item Start with the dashboard purpose: station-level monitoring, forecasting, and planning support.
-    \item Show \textbf{Overview}: map, total cyclists, station rankings, and growth rankings.
-    \item Show \textbf{Station Detail}: one busy station, daily pattern, hour-of-day pattern, weekday profile, and coverage.
-    \item Show \textbf{Forecast}: three models, rolling backtests, WAPE comparison, and future 168-hour forecast.
-    \item Show \textbf{Planning Insights}: priority score formula and recommendation categories.
-    \item Show \textbf{ML Engineering}: pipeline status, generated artifacts, and re-run commands.
-    \item End with limitations: default forecasts are trained for 12 high-demand stations; all-station training is supported but slower; weather and holidays are future extensions.
+    \item Start with \textbf{Overview}: map, total cyclists, station count, and highest daily traffic ranking.
+    \item Move to \textbf{Station Detail}: average daily traffic, peak hour count, coverage, daily trend, hourly pattern, and weekday profile.
+    \item Show \textbf{Forecast}: forecast horizon, baseline WAPE, best ML WAPE, best model, rolling backtest table, and scope explanation.
+    \item Explain \textbf{Planning Insights}: fast growth, fast decline, and daily outliers as three separate planning questions.
+    \item End with \textbf{ML Engineering}: end-to-end pipeline, run status, artifacts, and operational commands.
 \end{enumerate}
 
-\section{Docker Verification Note}
+\section{Docker Note}
 
-The project includes a \code{Dockerfile} and \code{.dockerignore}. The intended verification commands are:
+The project includes Docker support, but Docker is not necessary for the current local workflow. If Docker Desktop or another Docker runtime is installed, the intended commands are:
 
 \begin{verbatim}
 docker build -t mda-bike-dashboard .
@@ -520,6 +494,6 @@ docker run --rm -p 8000:8000 \
   mda-bike-dashboard
 \end{verbatim}
 
-During the latest local check, the command \code{docker --version} returned \code{command not found}. Therefore, Docker build and run were not executed on this machine. This should be verified after installing Docker Desktop or another Docker runtime.
+During the latest local check, Docker CLI was not available on the development machine. Therefore, Docker should be described as prepared for reproducibility and future deployment, not as the main verified execution path.
 
 \end{document}

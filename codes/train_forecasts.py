@@ -11,7 +11,6 @@ os.environ.setdefault("MPLCONFIGDIR", "/tmp/mda_matplotlib")
 
 import numpy as np
 import pandas as pd
-from prophet import Prophet
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import make_pipeline
@@ -163,34 +162,6 @@ def recursive_feature_predict(
     return pd.Series(predictions).reindex(target_hours.index)
 
 
-def fit_prophet(train: pd.DataFrame, yearly: bool) -> Prophet:
-    model = Prophet(
-        daily_seasonality=True,
-        weekly_seasonality=True,
-        yearly_seasonality=yearly,
-        seasonality_mode="additive",
-        interval_width=0.8,
-    )
-    model.fit(train.rename(columns={"hour": "ds", "count": "y"})[["ds", "y"]])
-    return model
-
-
-def prophet_predict(model: Prophet, target_hours: pd.Series) -> pd.DataFrame:
-    future = pd.DataFrame({"ds": pd.to_datetime(target_hours)})
-    forecast = model.predict(future)[["ds", "yhat", "yhat_lower", "yhat_upper"]]
-    forecast[["yhat", "yhat_lower", "yhat_upper"]] = forecast[
-        ["yhat", "yhat_lower", "yhat_upper"]
-    ].clip(lower=0)
-    return forecast.rename(
-        columns={
-            "ds": "hour",
-            "yhat": "forecast",
-            "yhat_lower": "forecast_lower",
-            "yhat_upper": "forecast_upper",
-        }
-    )
-
-
 def metrics(actual: pd.Series, predicted: pd.Series) -> dict[str, float]:
     aligned = pd.DataFrame({"actual": actual, "predicted": predicted}).dropna()
     if aligned.empty:
@@ -306,8 +277,6 @@ def train_forecasts(
     backtest_windows: int,
     backtest_step_hours: int,
 ) -> None:
-    logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
-    logging.getLogger("cmdstanpy").disabled = True
     hourly = pd.read_parquet(processed_dir / "hourly_counts.parquet")
     summary = pd.read_parquet(processed_dir / "station_summary.parquet")
     hourly["hour"] = pd.to_datetime(hourly["hour"])
@@ -400,28 +369,6 @@ def train_forecasts(
                             }
                         )
 
-            try:
-                yearly = train["hour"].max() - train["hour"].min() >= pd.Timedelta(days=365)
-                model = fit_prophet(train, yearly=yearly)
-                prophet_test = prophet_predict(model, test["hour"])
-                add_metric_row(
-                    backtest_rows,
-                    site_id,
-                    "prophet",
-                    train,
-                    test,
-                    int(window["backtest_window"]),
-                    metrics(test["count"].reset_index(drop=True), prophet_test["forecast"]),
-                )
-            except Exception as exc:
-                skipped.append(
-                    {
-                        "site_id": site_id,
-                        "backtest_window": window["backtest_window"],
-                        "reason": f"prophet failed: {exc}",
-                    }
-                )
-
         if valid_windows == 0:
             continue
 
@@ -469,16 +416,6 @@ def train_forecasts(
                 except Exception as exc:
                     skipped.append({"site_id": site_id, "reason": f"future {model_name} failed: {exc}"})
 
-        try:
-            yearly = final_train["hour"].max() - final_train["hour"].min() >= pd.Timedelta(days=365)
-            model = fit_prophet(final_train, yearly=yearly)
-            prophet_future = prophet_predict(model, future_hours)
-            prophet_future.insert(0, "site_id", site_id)
-            prophet_future.insert(2, "model", "prophet")
-            forecast_rows.append(prophet_future)
-        except Exception as exc:
-            skipped.append({"site_id": site_id, "reason": f"future prophet failed: {exc}"})
-
     backtests = pd.DataFrame(backtest_rows)
     evaluation = aggregate_backtests(backtests)
     forecasts = pd.concat(forecast_rows, ignore_index=True) if forecast_rows else pd.DataFrame()
@@ -513,7 +450,6 @@ def train_forecasts(
         "candidate_models": [
             "seasonal_naive",
             "hist_gradient_boosting",
-            "prophet",
         ],
         "all_stations": all_stations,
         "top_stations": top_stations,
@@ -537,14 +473,14 @@ def train_forecasts(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train baseline, sklearn, and Prophet forecasts.")
+    parser = argparse.ArgumentParser(description="Train baseline and sklearn forecasts.")
     parser.add_argument("--processed-dir", type=Path, default=PROCESSED_DIR)
     parser.add_argument("--top-stations", type=int, default=12)
     parser.add_argument("--all-stations", action="store_true", help="Train forecasts for all eligible stations.")
     parser.add_argument("--station-ids", default="", help="Optional comma-separated site IDs.")
     parser.add_argument("--horizon-hours", type=int, default=168)
     parser.add_argument("--test-hours", type=int, default=168)
-    parser.add_argument("--train-days", type=int, default=730)
+    parser.add_argument("--train-days", type=int, default=728)
     parser.add_argument("--backtest-windows", type=int, default=3)
     parser.add_argument("--backtest-step-hours", type=int, default=168)
     parser.add_argument("--min-coverage", type=float, default=0.75)

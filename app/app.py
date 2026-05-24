@@ -20,6 +20,7 @@ FORECAST_PATH = PROCESSED_DIR / "forecast_outputs.parquet"
 PIPELINE_RUN_PATH = PROCESSED_DIR / "pipeline_run_summary.json"
 FORECAST_RUN_PATH = PROCESSED_DIR / "forecast_run_summary.json"
 ORCHESTRATION_PATH = PROCESSED_DIR / "pipeline_orchestration.json"
+OUTLIER_Z_CUTOFF = 2.576
 
 
 def load_data() -> tuple[pd.DataFrame, pd.DataFrame, bool]:
@@ -56,86 +57,156 @@ def read_json(path: Path) -> dict[str, object]:
     return json.loads(path.read_text())
 
 
-def percentile_rank(values: pd.Series, ascending: bool = True) -> pd.Series:
-    numeric = pd.to_numeric(values, errors="coerce")
-    if numeric.nunique(dropna=True) <= 1:
-        return pd.Series(0.5, index=values.index)
-    return numeric.rank(pct=True, ascending=ascending).fillna(0.5)
+def pct_change(current: pd.Series, reference: pd.Series) -> pd.Series:
+    current = pd.to_numeric(current, errors="coerce")
+    reference = pd.to_numeric(reference, errors="coerce").mask(lambda values: values <= 0)
+    return (current - reference) / reference * 100
 
 
-def build_priority_table(summary: pd.DataFrame, evaluation: pd.DataFrame) -> pd.DataFrame:
-    if summary.empty:
-        return pd.DataFrame()
+def recent_daily_frame(hourly: pd.DataFrame, summary: pd.DataFrame, days: int = 28) -> pd.DataFrame:
+    daily = (
+        hourly[["site_id", "hour", "count"]]
+        .assign(date=lambda frame: frame["hour"].dt.floor("D"))
+        .groupby(["site_id", "date"], as_index=False, observed=True)["count"]
+        .sum()
+    )
+    if daily.empty:
+        return pd.DataFrame(columns=["site_id", "date", "count"])
 
-    table = summary.copy()
-    growth = pd.to_numeric(table["growth_pct_recent_vs_previous"], errors="coerce").fillna(0)
-    table["demand_score"] = percentile_rank(table["avg_daily_count"])
-    table["peak_pressure_score"] = percentile_rank(table["p95_hour_count"])
-    table["growth_score"] = percentile_rank(growth)
-    table["coverage_score"] = pd.to_numeric(table["coverage_rate"], errors="coerce").clip(0, 1).fillna(0)
+    max_date = daily["date"].max()
+    dates = pd.date_range(max_date - pd.Timedelta(days=days - 1), max_date, freq="D")
+    site_ids = summary["site_id"].dropna().astype(int).sort_values()
+    full_index = pd.MultiIndex.from_product([site_ids, dates], names=["site_id", "date"])
+    return daily.set_index(["site_id", "date"]).reindex(full_index).reset_index()
 
-    if not evaluation.empty:
-        best_forecast = (
-            evaluation.sort_values("wape")
-            .groupby("site_id", as_index=False)
-            .first()[["site_id", "model", "wape"]]
-            .rename(columns={"model": "best_forecast_model", "wape": "best_forecast_wape"})
-        )
-        table = table.merge(best_forecast, on="site_id", how="left")
-        table["forecast_reliability_score"] = percentile_rank(table["best_forecast_wape"], ascending=False)
+
+def period_mean_and_coverage(daily: pd.DataFrame, days: int) -> tuple[pd.Series, pd.Series]:
+    if daily.empty:
+        return pd.Series(dtype=float), pd.Series(dtype=float)
+    max_date = daily["date"].max()
+    start = max_date - pd.Timedelta(days=days - 1)
+    period = daily.loc[daily["date"] >= start]
+    grouped = period.groupby("site_id", observed=True)["count"]
+    return grouped.mean(), grouped.apply(lambda values: values.notna().mean())
+
+
+def build_trend_tables(
+    hourly: pd.DataFrame,
+    summary: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if hourly.empty or summary.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    daily = recent_daily_frame(hourly, summary, days=28)
+    table = summary[["site_id", "station_label", "gemeente"]].copy()
+    coverage_4w = None
+    for label, days in [("1w", 7), ("2w", 14), ("4w", 28)]:
+        mean, coverage = period_mean_and_coverage(daily, days)
+        table = table.merge(mean.rename(f"ma_{label}"), on="site_id", how="left")
+        if days == 28:
+            coverage_4w = coverage.rename("recent_coverage_4w")
+
+    if coverage_4w is None:
+        table["recent_coverage_4w"] = 0.0
     else:
-        table["best_forecast_model"] = "not trained"
-        table["best_forecast_wape"] = pd.NA
-        table["forecast_reliability_score"] = table["coverage_score"]
+        table = table.merge(coverage_4w, on="site_id", how="left")
+        table["recent_coverage_4w"] = table["recent_coverage_4w"].fillna(0.0)
 
-    table["priority_score"] = 100 * (
-        0.35 * table["demand_score"]
-        + 0.25 * table["peak_pressure_score"]
-        + 0.20 * table["growth_score"]
-        + 0.10 * table["forecast_reliability_score"]
-        + 0.10 * table["coverage_score"]
+    table["change_1w_vs_4w_pct"] = pct_change(table["ma_1w"], table["ma_4w"])
+    table["recent_coverage_4w_pct"] = table["recent_coverage_4w"] * 100
+    table["data_note"] = table["recent_coverage_4w"].map(
+        lambda value: "OK" if value >= 0.8 else "Low recent coverage"
+    )
+    trend_ready = table.loc[table["recent_coverage_4w"] >= 0.8].copy()
+    growth = trend_ready.loc[
+        (trend_ready["ma_1w"] > trend_ready["ma_2w"])
+        & (trend_ready["ma_2w"] > trend_ready["ma_4w"])
+    ].copy()
+    growth = growth.sort_values("change_1w_vs_4w_pct", ascending=False)
+
+    decline = trend_ready.loc[
+        (trend_ready["ma_1w"] < trend_ready["ma_2w"])
+        & (trend_ready["ma_2w"] < trend_ready["ma_4w"])
+    ].copy()
+    decline = decline.sort_values("change_1w_vs_4w_pct")
+    return growth, decline
+
+
+def robust_weekday_baseline(values: pd.Series) -> pd.Series:
+    median = values.median()
+    mad = (values - median).abs().median()
+    robust_std = 1.4826 * mad
+    return pd.Series(
+        {
+            "weekday_median": median,
+            "weekday_mad": mad,
+            "weekday_robust_std": max(float(robust_std), 1.0),
+            "weekday_observations": int(values.notna().sum()),
+        }
     )
 
-    peak_median = table["p95_hour_count"].median()
 
-    def recommendation(row: pd.Series) -> str:
-        if row["coverage_rate"] < 0.7:
-            return "Check sensor/data quality before using for investment decisions"
-        if row["priority_score"] >= 75 and row["growth_pct_recent_vs_previous"] >= 20:
-            return "Capacity upgrade candidate: high use and recent growth"
-        if row["priority_score"] >= 75:
-            return "High-demand corridor: review comfort and capacity"
-        if row["growth_pct_recent_vs_previous"] >= 40:
-            return "Emerging growth: monitor and compare nearby stations"
-        if row["p95_hour_count"] >= peak_median:
-            return "Peak-hour pressure: inspect rush-hour pattern"
-        return "Keep monitoring"
-
-    table["planning_recommendation"] = table.apply(recommendation, axis=1)
-    return table.sort_values("priority_score", ascending=False)
-
-
-def model_comparison_table(evaluation: pd.DataFrame) -> pd.DataFrame:
-    if evaluation.empty:
+def build_daily_outlier_table(hourly: pd.DataFrame, summary: pd.DataFrame) -> pd.DataFrame:
+    if hourly.empty or summary.empty:
         return pd.DataFrame()
 
-    baseline = evaluation.loc[evaluation["model"] == "seasonal_naive"][
-        ["site_id", "station_label", "gemeente", "wape"]
-    ].rename(columns={"wape": "baseline_wape"})
-    challengers = evaluation.loc[evaluation["model"] != "seasonal_naive"][
-        ["site_id", "model", "wape", "mae", "rmse"]
-    ].rename(columns={"wape": "model_wape"})
-    if baseline.empty or challengers.empty:
-        return pd.DataFrame()
-
-    table = challengers.merge(baseline, on="site_id", how="left")
-    table["wape_improvement_vs_baseline_pct"] = (
-        (table["baseline_wape"] - table["model_wape"])
-        / table["baseline_wape"].replace(0, pd.NA)
-        * 100
+    daily = (
+        hourly[["site_id", "hour", "count"]]
+        .assign(date=lambda frame: frame["hour"].dt.floor("D"))
+        .groupby(["site_id", "date"], as_index=False, observed=True)["count"]
+        .sum()
     )
-    table["beats_baseline"] = table["model_wape"] < table["baseline_wape"]
-    return table.sort_values("wape_improvement_vs_baseline_pct", ascending=False)
+    if daily.empty:
+        return pd.DataFrame()
+
+    daily["weekday"] = daily["date"].dt.day_name()
+    baseline = (
+        daily.groupby(["site_id", "weekday"], observed=True)["count"]
+        .apply(robust_weekday_baseline)
+        .unstack()
+        .reset_index()
+    )
+    scored = daily.merge(baseline, on=["site_id", "weekday"], how="left")
+    scored["robust_z"] = (
+        (scored["count"] - scored["weekday_median"]) / scored["weekday_robust_std"]
+    )
+    scored["outlier_direction"] = "normal"
+    scored.loc[scored["robust_z"] > OUTLIER_Z_CUTOFF, "outlier_direction"] = "high"
+    scored.loc[scored["robust_z"] < -OUTLIER_Z_CUTOFF, "outlier_direction"] = "low"
+    scored["is_outlier"] = scored["outlier_direction"] != "normal"
+
+    max_date = scored["date"].max()
+    recent_start = max_date - pd.Timedelta(days=27)
+    recent = scored.loc[scored["date"] >= recent_start].copy()
+    recent["outlier_date"] = recent["date"].where(recent["is_outlier"], pd.NaT)
+
+    summary_rows = (
+        recent.groupby("site_id", observed=True)
+        .agg(
+            recent_days_checked=("date", "nunique"),
+            outlier_days_4w=("is_outlier", "sum"),
+            high_outlier_days_4w=("outlier_direction", lambda values: int((values == "high").sum())),
+            low_outlier_days_4w=("outlier_direction", lambda values: int((values == "low").sum())),
+            max_abs_robust_z=("robust_z", lambda values: float(values.abs().max())),
+            latest_outlier_date=("outlier_date", "max"),
+        )
+        .reset_index()
+    )
+    summary_rows["outlier_rate_4w_pct"] = (
+        summary_rows["outlier_days_4w"] / summary_rows["recent_days_checked"].replace(0, pd.NA) * 100
+    )
+    summary_rows["latest_outlier_date"] = pd.to_datetime(
+        summary_rows["latest_outlier_date"], errors="coerce"
+    ).dt.date
+    summary_rows = summary_rows.merge(
+        summary[["site_id", "station_label", "gemeente"]],
+        on="site_id",
+        how="left",
+    )
+    return summary_rows.sort_values(
+        ["outlier_days_4w", "outlier_rate_4w_pct", "max_abs_robust_z"],
+        ascending=[False, False, False],
+    )
 
 
 HOURLY, SUMMARY, DATA_READY = load_data()
@@ -148,8 +219,12 @@ FORECAST_READY = not EVALUATION.empty and not FORECASTS.empty
 PIPELINE_RUN = read_json(PIPELINE_RUN_PATH)
 FORECAST_RUN = read_json(FORECAST_RUN_PATH)
 ORCHESTRATION_RUN = read_json(ORCHESTRATION_PATH)
-PRIORITY = build_priority_table(SUMMARY, EVALUATION) if DATA_READY else pd.DataFrame()
-MODEL_COMPARISON = model_comparison_table(EVALUATION)
+DAILY_OUTLIERS = build_daily_outlier_table(HOURLY, SUMMARY) if DATA_READY else pd.DataFrame()
+GROWTH_SIGNALS, DECLINE_SIGNALS = (
+    build_trend_tables(HOURLY, SUMMARY)
+    if DATA_READY
+    else (pd.DataFrame(), pd.DataFrame())
+)
 
 if DATA_READY:
     MIN_DATE = HOURLY["hour"].min().date()
@@ -159,7 +234,13 @@ if DATA_READY:
         for row in SUMMARY.sort_values("station_label").itertuples(index=False)
     }
     if FORECAST_READY:
-        DEFAULT_STATION = str(int(EVALUATION.sort_values("wape").iloc[0]["site_id"]))
+        forecasted_sites = EVALUATION["site_id"].dropna().astype(int).unique()
+        default_row = (
+            SUMMARY.loc[SUMMARY["site_id"].isin(forecasted_sites)]
+            .sort_values("avg_daily_count", ascending=False)
+            .iloc[0]
+        )
+        DEFAULT_STATION = str(int(default_row["site_id"]))
     else:
         DEFAULT_STATION = str(
             SUMMARY.sort_values("avg_daily_count", ascending=False).iloc[0]["site_id"]
@@ -251,11 +332,7 @@ app_ui = ui.page_navbar(
                 ui.card_header("Station map"),
                 output_widget("station_map"),
             ),
-            ui.layout_columns(
-                ui.card(ui.card_header("Highest average daily traffic"), ui.output_data_frame("top_traffic_table")),
-                ui.card(ui.card_header("Fastest recent growth"), ui.output_data_frame("top_growth_table")),
-                col_widths=[6, 6],
-            ),
+            ui.card(ui.card_header("Highest average daily traffic"), ui.output_data_frame("top_traffic_table")),
         ),
     ),
     ui.nav_panel(
@@ -272,7 +349,7 @@ app_ui = ui.page_navbar(
                 ui.value_box("Coverage", ui.output_text("station_coverage"), showcase="data"),
                 col_widths=[4, 4, 4],
             ),
-            ui.card(ui.card_header("Hourly traffic over time"), output_widget("station_timeseries")),
+            ui.card(ui.card_header("Daily traffic over time"), output_widget("station_timeseries")),
             ui.layout_columns(
                 ui.card(ui.card_header("Average pattern by hour"), output_widget("hourly_pattern")),
                 ui.card(ui.card_header("Weekday profile"), output_widget("weekday_pattern")),
@@ -300,10 +377,6 @@ app_ui = ui.page_navbar(
                 col_widths=[4, 4, 4],
             ),
             ui.card(
-                ui.card_header("Forecast scope"),
-                ui.output_text("forecast_scope_note"),
-            ),
-            ui.card(
                 ui.card_header("Forecast output"),
                 output_widget("forecast_plot"),
             ),
@@ -312,11 +385,7 @@ app_ui = ui.page_navbar(
                 ui.output_data_frame("forecast_eval_table"),
             ),
             ui.card(
-                ui.card_header("Model added value across trained stations"),
-                ui.output_data_frame("model_comparison_table"),
-            ),
-            ui.card(
-                ui.card_header("Interpretation"),
+                ui.card_header("Scope and interpretation"),
                 ui.output_text("forecast_note"),
             ),
         ),
@@ -329,65 +398,101 @@ app_ui = ui.page_navbar(
                 width=300,
             ),
             ui.card(
-                ui.card_header("Planning-oriented indicators"),
-                ui.p(
-                    "These tables turn the monitoring data into signals for infrastructure planning: high demand, fast growth, peak pressure, and data quality risks."
+                ui.card_header("Three separate planning questions"),
+                ui.div(
+                    {"class": "compact-explainer"},
+                    ui.p("This page separates planning signals into three focused views, so planners can inspect one question at a time."),
+                    ui.tags.ul(
+                        ui.tags.li("Fast Growth: ma_1w > ma_2w > ma_4w, highlighting consistently strengthening demand."),
+                        ui.tags.li("Fast Decline: ma_1w < ma_2w < ma_4w, highlighting consistently weakening demand."),
+                        ui.tags.li("Daily Outliers: flags unusual daily counts against each station's own same-weekday history."),
+                    ),
                 ),
-                ui.p(
-                    "Priority score = 35% demand + 25% peak pressure + 20% recent growth + 10% forecast reliability + 10% data coverage."
+            ),
+            ui.navset_card_tab(
+                ui.nav_panel(
+                    "Fast Growth",
+                    ui.p(
+                        "Question: which stations show the strongest recent acceleration? Rule: ma_1w > ma_2w > ma_4w. Ranking: largest positive change_1w_vs_4w_pct."
+                    ),
+                    ui.output_data_frame("growth_table"),
                 ),
-                ui.p(
-                    "The score is a screening tool, not an automatic investment decision. Low-coverage stations are flagged for sensor or data checks first."
+                ui.nav_panel(
+                    "Fast Decline",
+                    ui.p(
+                        "Question: which stations show the strongest recent deterioration? Rule: ma_1w < ma_2w < ma_4w. Ranking: most negative change_1w_vs_4w_pct."
+                    ),
+                    ui.output_data_frame("decline_table"),
                 ),
-            ),
-            ui.card(
-                ui.card_header("Infrastructure priority shortlist"),
-                ui.output_data_frame("priority_table"),
-            ),
-            ui.layout_columns(
-                ui.card(ui.card_header("High demand stations"), ui.output_data_frame("demand_table")),
-                ui.card(ui.card_header("Peak pressure stations"), ui.output_data_frame("pressure_table")),
-                col_widths=[6, 6],
-            ),
-            ui.layout_columns(
-                ui.card(ui.card_header("Fast growth stations"), ui.output_data_frame("growth_table")),
-                ui.card(ui.card_header("Lowest data coverage"), ui.output_data_frame("quality_table")),
-                col_widths=[6, 6],
-            ),
-            ui.card(
-                ui.card_header("Most predictable forecast stations"),
-                ui.output_data_frame("predictability_table"),
+                ui.nav_panel(
+                    "Daily Outliers",
+                    ui.p(
+                        "Question: which stations have the most unusual days in the latest 4 weeks? A day is an outlier when its robust z-score exceeds the two-sided 99% cutoff."
+                    ),
+                    ui.output_data_frame("daily_outlier_table"),
+                ),
             ),
         ),
     ),
     ui.nav_panel(
         "ML Engineering",
+        ui.card(
+            ui.card_header("End-to-end pipeline"),
+            ui.div(
+                {"class": "pipeline-flow"},
+                ui.div(
+                    {"class": "flow-step"},
+                    ui.div({"class": "flow-step-number"}, "1"),
+                    ui.h5("Ingest raw data"),
+                    ui.p("Monthly AWV CSV files and station metadata are read from the local data folder."),
+                ),
+                ui.div(
+                    {"class": "flow-step"},
+                    ui.div({"class": "flow-step-number"}, "2"),
+                    ui.h5("Build features"),
+                    ui.p("Raw counts are aggregated into hourly station data and station-level summary features."),
+                ),
+                ui.div(
+                    {"class": "flow-step"},
+                    ui.div({"class": "flow-step-number"}, "3"),
+                    ui.h5("Train and validate"),
+                    ui.p("Forecast models are trained per station and checked with rolling time-based backtests."),
+                ),
+                ui.div(
+                    {"class": "flow-step"},
+                    ui.div({"class": "flow-step-number"}, "4"),
+                    ui.h5("Serve dashboard"),
+                    ui.p("The dashboard reads saved artifacts, so it stays fast and does not retrain models live."),
+                ),
+            ),
+        ),
         ui.layout_columns(
             ui.value_box("Processed rows", ui.output_text("engineering_rows"), showcase="data"),
-            ui.value_box("Model runs", ui.output_text("engineering_models"), showcase="ml"),
+            ui.value_box("Forecast stations", ui.output_text("engineering_forecast_stations"), showcase="sites"),
+            ui.value_box("Backtest windows", ui.output_text("engineering_backtests"), showcase="validation"),
             ui.value_box("Forecast horizon", ui.output_text("engineering_horizon"), showcase="time"),
-            col_widths=[4, 4, 4],
+            col_widths=[3, 3, 3, 3],
+        ),
+        ui.card(
+            ui.card_header("Engineering takeaway"),
+            ui.p(
+                "The dashboard is only the presentation layer. Data preparation, model validation, forecast generation, and run metadata are handled by repeatable scripts before the dashboard loads."
+            ),
         ),
         ui.layout_columns(
             ui.card(
-                ui.card_header("Pipeline status"),
+                ui.card_header("Run status"),
                 ui.output_data_frame("pipeline_status_table"),
             ),
             ui.card(
-                ui.card_header("Generated artifacts"),
+                ui.card_header("Dashboard artifacts"),
                 ui.output_data_frame("artifact_table"),
             ),
             col_widths=[6, 6],
         ),
         ui.card(
-            ui.card_header("Re-run commands"),
+            ui.card_header("Operational commands"),
             ui.output_text_verbatim("rerun_commands"),
-        ),
-        ui.card(
-            ui.card_header("Why this matters"),
-            ui.p(
-                "This page makes the project less like a one-off analysis. It documents how raw CSV files become processed features, how models are retrained, and which artifacts the dashboard consumes."
-            ),
         ),
     ),
     title="Bicycle Traffic Monitoring Dashboard",
@@ -479,12 +584,16 @@ def server(input, output, session):
 
         station_period = (
             data.groupby(["site_id", "station_label", "naam", "gemeente", "lat", "long"], as_index=False)
-            .agg(total_count=("count", "sum"), avg_hourly_count=("count", "mean"))
+            .agg(
+                total_count=("count", "sum"),
+                avg_hourly_count=("count", "mean"),
+                active_days=("hour", lambda hours: hours.dt.date.nunique()),
+            )
             .dropna(subset=["lat", "long"])
         )
-        station_period["avg_daily_count"] = station_period["total_count"] / max(
-            data["hour"].dt.date.nunique(), 1
-        )
+        station_period["avg_daily_count"] = station_period["total_count"] / station_period[
+            "active_days"
+        ].clip(lower=1)
 
         fig = px.scatter_mapbox(
             station_period,
@@ -493,7 +602,13 @@ def server(input, output, session):
             size="avg_daily_count",
             color="avg_daily_count",
             hover_name="station_label",
-            hover_data={"avg_daily_count": ":.1f", "total_count": ":,", "lat": False, "long": False},
+            hover_data={
+                "avg_daily_count": ":.1f",
+                "active_days": ":,",
+                "total_count": ":,",
+                "lat": False,
+                "long": False,
+            },
             color_continuous_scale="Viridis",
             zoom=7,
             height=520,
@@ -507,23 +622,19 @@ def server(input, output, session):
         data = overview_data()
         if data.empty:
             return pd.DataFrame()
-        days = max(data["hour"].dt.date.nunique(), 1)
         table = (
-            data.groupby(["site_id", "station_label"], as_index=False)["count"]
-            .sum()
-            .assign(avg_daily=lambda d: d["count"] / days)
+            data.groupby(["site_id", "station_label"], as_index=False)
+            .agg(
+                total_count=("count", "sum"),
+                active_days=("hour", lambda hours: hours.dt.date.nunique()),
+            )
+            .assign(avg_daily=lambda d: d["total_count"] / d["active_days"].clip(lower=1))
             .sort_values("avg_daily", ascending=False)
             .head(input.top_n())
         )
-        return table[["station_label", "avg_daily", "count"]].round({"avg_daily": 1})
-
-    @output
-    @render.data_frame
-    def top_growth_table():
-        if not DATA_READY:
-            return pd.DataFrame()
-        table = SUMMARY.sort_values("growth_pct_recent_vs_previous", ascending=False).head(input.top_n())
-        return table[["station_label", "recent_avg_daily", "previous_avg_daily", "growth_pct_recent_vs_previous"]].round(1)
+        return table[["station_label", "avg_daily", "active_days", "total_count"]].round(
+            {"avg_daily": 1}
+        )
 
     @output
     @render.text
@@ -557,6 +668,7 @@ def server(input, output, session):
             return blank_figure("No data for this station and date range.")
         daily = data.assign(date=data["hour"].dt.date).groupby("date", as_index=False)["count"].sum()
         fig = px.line(daily, x="date", y="count", markers=False, template="plotly_white")
+        fig.update_traces(line_color="#1f8a70")
         fig.update_layout(height=390, xaxis_title="", yaxis_title="Daily cyclists")
         return fig
 
@@ -567,6 +679,7 @@ def server(input, output, session):
             return blank_figure("No data for this station and date range.")
         pattern = data.assign(hour_of_day=data["hour"].dt.hour).groupby("hour_of_day", as_index=False)["count"].mean()
         fig = px.bar(pattern, x="hour_of_day", y="count", template="plotly_white")
+        fig.update_traces(marker_color="#f2b35d")
         fig.update_layout(height=350, xaxis_title="Hour of day", yaxis_title="Average cyclists")
         return fig
 
@@ -579,6 +692,7 @@ def server(input, output, session):
         pattern = data.assign(weekday=data["hour"].dt.dayofweek).groupby("weekday", as_index=False)["count"].mean()
         pattern["weekday"] = pattern["weekday"].map(dict(enumerate(names)))
         fig = px.bar(pattern, x="weekday", y="count", template="plotly_white")
+        fig.update_traces(marker_color="#3a7ca5")
         fig.update_layout(height=350, xaxis_title="", yaxis_title="Average hourly cyclists")
         return fig
 
@@ -612,25 +726,6 @@ def server(input, output, session):
             return "baseline"
         row = evaluation.sort_values("wape").iloc[0]
         return str(row["model"]).replace("_", " ")
-
-    @output
-    @render.text
-    def forecast_scope_note():
-        if not DATA_READY:
-            return "No processed data loaded yet."
-        trained = EVALUATION["site_id"].nunique() if not EVALUATION.empty else 0
-        total = SUMMARY["site_id"].nunique() if not SUMMARY.empty else 0
-        windows = int(FORECAST_RUN.get("backtest_windows", 1)) if FORECAST_RUN else 1
-        step = int(FORECAST_RUN.get("backtest_step_hours", 168)) if FORECAST_RUN else 168
-        if FORECAST_READY:
-            return (
-                f"Monitoring and planning use all {total} stations. Saved forecasts are currently trained for "
-                f"{trained} selected stations. Model metrics are averaged over {windows} rolling backtest windows "
-                f"spaced {step} hours apart. Use --all-stations to train forecasts for every eligible station."
-            )
-        return (
-            f"Monitoring and planning use all {total} stations, but saved forecast artifacts have not been generated yet."
-        )
 
     @render_widget
     def forecast_plot():
@@ -666,20 +761,6 @@ def server(input, output, session):
                         line={"dash": "dash" if model_name == "seasonal_naive" else "solid"},
                     )
                 )
-                if model_name == "prophet" and model_data["forecast_lower"].notna().any():
-                    fig.add_trace(
-                        go.Scatter(
-                            x=pd.concat([model_data["hour"], model_data["hour"].iloc[::-1]]),
-                            y=pd.concat(
-                                [model_data["forecast_upper"], model_data["forecast_lower"].iloc[::-1]]
-                            ),
-                            fill="toself",
-                            fillcolor="rgba(31, 138, 112, 0.16)",
-                            line={"color": "rgba(255,255,255,0)"},
-                            hoverinfo="skip",
-                            name="Prophet interval",
-                        )
-                    )
         fig.update_layout(
             template="plotly_white",
             height=460,
@@ -718,104 +799,104 @@ def server(input, output, session):
         return evaluation[[column for column in columns if column in evaluation.columns]].round(2)
 
     @output
-    @render.data_frame
-    def model_comparison_table():
-        if MODEL_COMPARISON.empty:
-            return pd.DataFrame()
-        table = MODEL_COMPARISON.head(12).copy()
-        return table[
-            [
-                "station_label",
-                "gemeente",
-                "model",
-                "baseline_wape",
-                "model_wape",
-                "wape_improvement_vs_baseline_pct",
-                "beats_baseline",
-            ]
-        ].round(2)
-
-    @output
     @render.text
     def forecast_note():
-        if FORECAST_READY and not selected_evaluation().empty:
+        if not DATA_READY:
+            return "No processed data loaded yet."
+
+        trained = EVALUATION["site_id"].nunique() if not EVALUATION.empty else 0
+        total = SUMMARY["site_id"].nunique() if not SUMMARY.empty else 0
+        windows = int(FORECAST_RUN.get("backtest_windows", 1)) if FORECAST_RUN else 1
+        step = int(FORECAST_RUN.get("backtest_step_hours", 168)) if FORECAST_RUN else 168
+
+        if not FORECAST_READY:
             return (
-                "This page reads saved model outputs from the forecasting pipeline. "
-                "The dashboard compares seasonal naive, histogram gradient boosting, and Prophet across rolling time-based backtests. "
-                "The best model is selected per station by average WAPE, then future forecasts are generated after retraining on the latest available history."
+                f"Monitoring and planning use all {total} stations, but saved forecast artifacts have not been generated yet. "
+                "This station therefore falls back to an online seasonal naive baseline."
             )
-        return (
-            "This station does not have saved Prophet outputs yet, so the dashboard falls back to an online seasonal naive baseline."
+
+        if FORECAST_RUN.get("all_stations"):
+            scope = f"all {trained} eligible stations"
+            suffix = "Stations outside this set did not meet the minimum history or coverage rules."
+        else:
+            scope = f"{trained} selected stations"
+            suffix = "Use --all-stations to train forecasts for every eligible station."
+
+        scope_note = (
+            f"Monitoring and planning use all {total} stations. Saved forecasts are currently trained for "
+            f"{scope}. Model metrics are averaged over {windows} rolling backtest windows "
+            f"spaced {step} hours apart. {suffix}"
         )
 
-    @output
-    @render.data_frame
-    def priority_table():
-        if PRIORITY.empty:
-            return pd.DataFrame()
-        table = PRIORITY.head(input.insight_n()).copy()
-        table["coverage_pct"] = table["coverage_rate"] * 100
-        return table[
-            [
-                "station_label",
-                "gemeente",
-                "priority_score",
-                "avg_daily_count",
-                "p95_hour_count",
-                "growth_pct_recent_vs_previous",
-                "coverage_pct",
-                "best_forecast_model",
-                "best_forecast_wape",
-                "planning_recommendation",
-            ]
-        ].round(2)
-
-    @output
-    @render.data_frame
-    def demand_table():
-        if not DATA_READY:
-            return pd.DataFrame()
-        table = SUMMARY.sort_values("avg_daily_count", ascending=False).head(input.insight_n())
-        return table[["station_label", "avg_daily_count", "total_count", "gemeente"]].round(1)
-
-    @output
-    @render.data_frame
-    def pressure_table():
-        if not DATA_READY:
-            return pd.DataFrame()
-        table = SUMMARY.sort_values("p95_hour_count", ascending=False).head(input.insight_n())
-        return table[["station_label", "p95_hour_count", "peak_hour_count", "gemeente"]].round(1)
+        if FORECAST_READY and not selected_evaluation().empty:
+            return (
+                f"{scope_note} This page reads saved model outputs from the forecasting pipeline. "
+                "For the selected station, it compares a seasonal naive baseline with histogram gradient boosting across rolling time-based backtests. "
+                "The best model for this station is selected by average WAPE, then future forecasts are generated after retraining on the latest available history."
+            )
+        return (
+            f"{scope_note} This station does not have saved model outputs yet, so the dashboard falls back to an online seasonal naive baseline."
+        )
 
     @output
     @render.data_frame
     def growth_table():
-        if not DATA_READY:
-            return pd.DataFrame()
-        table = SUMMARY.sort_values("growth_pct_recent_vs_previous", ascending=False).head(input.insight_n())
-        return table[["station_label", "recent_avg_daily", "previous_avg_daily", "growth_pct_recent_vs_previous"]].round(1)
+        if GROWTH_SIGNALS.empty:
+            return pd.DataFrame(
+                [{"message": "No reliable fast-growth station detected with the current trend view."}]
+            )
+        table = GROWTH_SIGNALS.head(input.insight_n()).copy()
+        return table[
+            [
+                "station_label",
+                "gemeente",
+                "ma_1w",
+                "ma_2w",
+                "ma_4w",
+                "change_1w_vs_4w_pct",
+            ]
+        ].round(2)
 
     @output
     @render.data_frame
-    def quality_table():
-        if not DATA_READY:
-            return pd.DataFrame()
-        table = SUMMARY.sort_values("coverage_rate", ascending=True).head(input.insight_n()).copy()
-        table["coverage_pct"] = table["coverage_rate"] * 100
-        return table[["station_label", "coverage_pct", "observed_hours", "expected_hours"]].round(1)
+    def decline_table():
+        if DECLINE_SIGNALS.empty:
+            return pd.DataFrame(
+                [
+                    {
+                        "message": "No reliable fast-decline station detected with the current trend view."
+                    }
+                ]
+            )
+        table = DECLINE_SIGNALS.head(input.insight_n()).copy()
+        return table[
+            [
+                "station_label",
+                "gemeente",
+                "ma_1w",
+                "ma_2w",
+                "ma_4w",
+                "change_1w_vs_4w_pct",
+            ]
+        ].round(2)
 
     @output
     @render.data_frame
-    def predictability_table():
-        if not FORECAST_READY:
+    def daily_outlier_table():
+        if DAILY_OUTLIERS.empty:
             return pd.DataFrame()
-        table = (
-            EVALUATION.sort_values("wape")
-            .groupby("site_id", as_index=False)
-            .first()
-            .sort_values("wape")
-            .head(input.insight_n())
-        )
-        return table[["station_label", "model", "mae", "rmse", "wape", "test_hours"]].round(2)
+        table = DAILY_OUTLIERS.head(input.insight_n()).copy()
+        return table[
+            [
+                "station_label",
+                "gemeente",
+                "outlier_days_4w",
+                "high_outlier_days_4w",
+                "low_outlier_days_4w",
+                "outlier_rate_4w_pct",
+                "max_abs_robust_z",
+            ]
+        ].round(2)
 
     @output
     @render.text
@@ -826,11 +907,20 @@ def server(input, output, session):
 
     @output
     @render.text
-    def engineering_models():
+    def engineering_forecast_stations():
+        if EVALUATION.empty:
+            return "0"
+        total = SUMMARY["site_id"].nunique() if DATA_READY else EVALUATION["site_id"].nunique()
+        trained = EVALUATION["site_id"].nunique()
+        return f"{trained} / {total}"
+
+    @output
+    @render.text
+    def engineering_backtests():
         if EVALUATION.empty:
             return "0"
         windows = int(FORECAST_RUN.get("backtest_windows", 1)) if FORECAST_RUN else 1
-        return f"{EVALUATION['model'].nunique()} models / {EVALUATION['site_id'].nunique()} stations / {windows} windows"
+        return f"{windows} windows"
 
     @output
     @render.text
@@ -844,22 +934,25 @@ def server(input, output, session):
     def pipeline_status_table():
         rows = [
             {
-                "component": "Preprocessing",
+                "step": "1. Preprocessing",
                 "status": "ready" if DATA_READY else "missing",
-                "details": (
+                "what_it_checks": "Raw CSVs -> hourly counts and station summaries",
+                "evidence": (
                     f"{PIPELINE_RUN.get('monthly_files', 0)} monthly files, "
-                    f"{int(PIPELINE_RUN.get('stations_with_counts', 0)):,} stations"
+                    f"{int(PIPELINE_RUN.get('stations_with_counts', 0)):,} stations, "
+                    f"{int(PIPELINE_RUN.get('hourly_rows', 0)):,} hourly rows"
                     if PIPELINE_RUN
                     else "Run codes/preprocess.py"
                 ),
                 "last_run_utc": PIPELINE_RUN.get("generated_at_utc", "n/a"),
             },
             {
-                "component": "Forecast training",
+                "step": "2. Forecast training",
                 "status": "ready" if FORECAST_READY else "missing",
-                "details": (
-                    f"{FORECAST_RUN.get('evaluated_rows', 0)} evaluation rows, "
-                    f"{FORECAST_RUN.get('backtest_rows', 0)} backtest rows, "
+                "what_it_checks": "Per-station models, rolling backtests, saved forecasts",
+                "evidence": (
+                    f"{len(FORECAST_RUN.get('selected_sites', []))} stations, "
+                    f"{FORECAST_RUN.get('backtest_windows', 0)} windows, "
                     f"{FORECAST_RUN.get('forecast_rows', 0)} forecast rows"
                     if FORECAST_RUN
                     else "Run codes/train_forecasts.py"
@@ -867,10 +960,18 @@ def server(input, output, session):
                 "last_run_utc": FORECAST_RUN.get("generated_at_utc", "n/a"),
             },
             {
-                "component": "Pipeline orchestration",
+                "step": "3. Orchestration",
                 "status": "ready" if ORCHESTRATION_RUN else "optional",
-                "details": ORCHESTRATION_RUN.get("status", "Use codes/run_pipeline.py for one-command refresh"),
+                "what_it_checks": "One command can refresh preprocessing and forecasts",
+                "evidence": ORCHESTRATION_RUN.get("status", "Use codes/run_pipeline.py for one-command refresh"),
                 "last_run_utc": ORCHESTRATION_RUN.get("finished_at_utc", "n/a"),
+            },
+            {
+                "step": "4. Dashboard serving",
+                "status": "ready" if DATA_READY else "missing",
+                "what_it_checks": "Shiny reads saved artifacts instead of retraining live",
+                "evidence": "App can load processed dashboard inputs" if DATA_READY else "Processed inputs are missing",
+                "last_run_utc": "runtime",
             },
         ]
         return pd.DataFrame(rows)
@@ -879,24 +980,25 @@ def server(input, output, session):
     @render.data_frame
     def artifact_table():
         artifacts = [
-            (HOURLY_PATH, "Hourly counts used by all dashboard pages"),
-            (SUMMARY_PATH, "Station-level features and planning indicators"),
-            (EVALUATION_PATH, "Average model metrics across rolling backtests"),
-            (BACKTEST_PATH, "Detailed per-window backtest metrics"),
-            (FORECAST_PATH, "Saved 24h/168h forecast outputs"),
-            (PIPELINE_RUN_PATH, "Preprocessing run metadata"),
-            (FORECAST_RUN_PATH, "Forecast training run metadata"),
-            (ORCHESTRATION_PATH, "One-command pipeline run metadata"),
+            ("Features", HOURLY_PATH, "Hourly counts used by all dashboard pages"),
+            ("Features", SUMMARY_PATH, "Station-level features and planning indicators"),
+            ("Model validation", EVALUATION_PATH, "Average model metrics across rolling backtests"),
+            ("Model validation", BACKTEST_PATH, "Detailed per-window backtest metrics"),
+            ("Forecast serving", FORECAST_PATH, "Saved 24h/168h forecast outputs"),
+            ("Run metadata", PIPELINE_RUN_PATH, "Preprocessing run metadata"),
+            ("Run metadata", FORECAST_RUN_PATH, "Forecast training run metadata"),
+            ("Run metadata", ORCHESTRATION_PATH, "One-command pipeline run metadata"),
         ]
         rows = []
-        for path, role in artifacts:
+        for stage, path, role in artifacts:
             exists = path.exists()
             rows.append(
                 {
+                    "stage": stage,
                     "artifact": str(path.relative_to(ROOT)),
-                    "role": role,
                     "status": "available" if exists else "missing",
                     "size_mb": round(path.stat().st_size / 1024 / 1024, 2) if exists else 0,
+                    "role": role,
                 }
             )
         return pd.DataFrame(rows)
@@ -906,16 +1008,13 @@ def server(input, output, session):
     def rerun_commands():
         return "\n".join(
             [
-                "# Full refresh from raw CSV files",
-                "python codes/run_pipeline.py --start-month 2019-08 --end-month 2026-04 --top-stations 12",
+                "# 1. Full refresh from raw CSV files",
+                "python codes/run_pipeline.py --start-month 2019-08 --end-month 2026-04 --all-stations",
                 "",
-                "# If processed data already exists, only retrain forecasts",
-                "python codes/run_pipeline.py --skip-preprocess --top-stations 12 --backtest-windows 3",
-                "",
-                "# Optional: train forecasts for all eligible stations. This can take much longer.",
+                "# 2. If processed data already exists, only retrain forecasts",
                 "python codes/run_pipeline.py --skip-preprocess --all-stations --backtest-windows 3",
                 "",
-                "# Run the dashboard locally",
+                "# 3. Run the dashboard locally",
                 "shiny run --host 127.0.0.1 --port 8000 app/app.py",
             ]
         )

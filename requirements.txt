@@ -4,4 +4,3 @@ plotly
 shiny
 shinywidgets
 scikit-learn
-prophet

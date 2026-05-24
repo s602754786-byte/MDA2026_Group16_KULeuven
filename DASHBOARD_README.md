@@ -23,20 +23,16 @@ pip install -r requirements.txt
 Recommended one-command refresh:
 
 ```bash
-python codes/run_pipeline.py --start-month 2019-08 --end-month 2026-04 --top-stations 12 --backtest-windows 3
+python codes/run_pipeline.py --start-month 2019-08 --end-month 2026-04 --all-stations --backtest-windows 3
 ```
 
 If the processed parquet files already exist and you only want to retrain forecasts:
 
 ```bash
-python codes/run_pipeline.py --skip-preprocess --top-stations 12 --backtest-windows 3
-```
-
-The default forecast command trains the busiest 12 stations to keep the demo fast. Monitoring and planning pages still use all processed stations. To train forecasts for every eligible station, run:
-
-```bash
 python codes/run_pipeline.py --skip-preprocess --all-stations --backtest-windows 3
 ```
+
+The current forecast command trains all eligible stations. In the latest local run, monitoring uses all 150 processed stations and saved forecasts are available for 147 eligible stations.
 
 Model metrics are averaged over rolling backtest windows. This is more robust than evaluating only the final week once.
 
@@ -56,16 +52,16 @@ python codes/preprocess.py --start-month 2019-08 --end-month 2026-04
 
 ## 5. Train forecast outputs
 
-Train the seasonal naive baseline, histogram gradient boosting, and Prophet for the busiest stations:
+Train the seasonal naive baseline and histogram gradient boosting for the busiest stations:
 
 ```bash
-python codes/train_forecasts.py --top-stations 12 --horizon-hours 168 --test-hours 168 --train-days 730 --backtest-windows 3
+python codes/train_forecasts.py --all-stations --horizon-hours 168 --test-hours 168 --train-days 728 --backtest-windows 3
 ```
 
 To train forecasts for all eligible stations:
 
 ```bash
-python codes/train_forecasts.py --all-stations --horizon-hours 168 --test-hours 168 --train-days 730 --backtest-windows 3
+python codes/train_forecasts.py --all-stations --horizon-hours 168 --test-hours 168 --train-days 728 --backtest-windows 3
 ```
 
 ## 6. Run the dashboard locally

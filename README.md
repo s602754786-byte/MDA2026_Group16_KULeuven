@@ -12,7 +12,7 @@ The dashboard supports:
 - inspecting station-level historical patterns;
 - forecasting future hourly counts for selected high-demand stations;
 - comparing forecasting models against a seasonal naive baseline;
-- identifying planning-relevant stations using demand, peak pressure, growth, forecast reliability, and data coverage;
+- identifying planning signals through separate fast-growth, fast-decline, and daily-outlier views;
 - documenting pipeline status and generated artifacts.
 
 ## Repository Structure
@@ -66,22 +66,16 @@ pip install -r requirements.txt
 Full refresh from raw CSV files:
 
 ```bash
-python codes/run_pipeline.py --start-month 2019-08 --end-month 2026-04 --top-stations 12 --backtest-windows 3
+python codes/run_pipeline.py --start-month 2019-08 --end-month 2026-04 --all-stations --backtest-windows 3
 ```
 
 If processed Parquet files already exist and only forecasts need to be refreshed:
 
 ```bash
-python codes/run_pipeline.py --skip-preprocess --top-stations 12 --backtest-windows 3
-```
-
-To train forecasts for every eligible station instead of only the busiest 12:
-
-```bash
 python codes/run_pipeline.py --skip-preprocess --all-stations --backtest-windows 3
 ```
 
-The default forecast run trains the busiest 12 eligible stations to keep the demo fast. Monitoring and planning views still use all 150 processed stations.
+The current dashboard run trains forecasts for all eligible stations. In the latest local run this means 147 forecasted stations out of 150 monitored stations.
 
 ## Run the Dashboard
 
@@ -102,7 +96,7 @@ Use this sequence for a clear presentation:
 1. `Overview`: show the map, total rows, total cyclists, and top traffic stations.
 2. `Station Detail`: select a busy station and explain daily, hourly, and weekday patterns.
 3. `Forecast`: show 24-hour and 168-hour forecasts, rolling backtest metrics, and best model selection.
-4. `Planning Insights`: explain the priority score and planning recommendations.
+4. `Planning Insights`: explain the moving-average growth/decline views and the robust weekday outlier checks.
 5. `ML Engineering`: show that the dashboard is backed by a reproducible pipeline and saved artifacts.
 
 See `DEMO_SCRIPT.md` for a more detailed speaking script.
@@ -112,8 +106,7 @@ See `DEMO_SCRIPT.md` for a more detailed speaking script.
 The current forecasting pipeline compares:
 
 - `seasonal_naive`;
-- `hist_gradient_boosting`;
-- `prophet`.
+- `hist_gradient_boosting`.
 
 Model evaluation uses 3 rolling backtest windows with a 168-hour test horizon. The best model is selected per station based on average WAPE.
 

@@ -54,7 +54,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--station-ids", default="", help="Optional comma-separated site IDs for forecasting.")
     parser.add_argument("--horizon-hours", type=int, default=168)
     parser.add_argument("--test-hours", type=int, default=168)
-    parser.add_argument("--train-days", type=int, default=730)
+    parser.add_argument("--train-days", type=int, default=728)
     parser.add_argument("--backtest-windows", type=int, default=3)
     parser.add_argument("--backtest-step-hours", type=int, default=168)
     parser.add_argument("--min-coverage", type=float, default=0.75)
