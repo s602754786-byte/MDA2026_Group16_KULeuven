@@ -58,12 +58,14 @@
     \vspace{1.4em}
     {\large\textbf{Group 16}\par}
     \vspace{1em}
+    {\large
     \begin{tabular}{>{\bfseries}ll}
         Ghasemian Moghaddam Alireza & r1079987 \\
         Xuanang Li & r1070796 \\
         Yavuz Tok & r0882205 \\
         Zeren Su & r1082963 \\
     \end{tabular}
+    \par}
     \vfill
     {\color{MidnightBlue}\rule{0.86\textwidth}{0.9pt}\par}
     \vspace{0.6em}
@@ -99,6 +101,7 @@ The main project objectives are:
 
 The stakeholder value is strongest for infrastructure supervisors and mobility planners. They can use the dashboard to screen locations that deserve further investigation, not to make automatic investment decisions. The dashboard highlights where demand is high, where recent demand is strengthening or weakening, and where data quality or unusual counts may require closer checking.
 
+\clearpage
 \section{Data Source and Preprocessing}
 
 \subsection{Input Data}
@@ -428,7 +431,7 @@ This project delivers a working station-level bicycle traffic monitoring and for
 
 The main contribution is the combination of dashboarding and ML engineering. The dashboard is not only a visualization layer; it is supported by preprocessing scripts, Parquet artifacts, rolling backtests, forecast outputs, run metadata, and operational commands. This makes the project closer to a maintainable analytics system than to a one-time analysis, and it directly reflects the Modern Data Analytics themes of Python data science, machine learning pipelines, dashboarding, reproducibility, and analytics infrastructure.
 
-\clearpage
+\section*{Appendix}
 \appendix
 \section{Reproducibility Commands}
 
@@ -493,7 +496,5 @@ docker run --rm -p 8000:8000 \
   -v "$PWD/data/processed:/app/data/processed" \
   mda-bike-dashboard
 \end{verbatim}
-
-During the latest local check, Docker CLI was not available on the development machine. Therefore, Docker should be described as prepared for reproducibility and future deployment, not as the main verified execution path.
 
 \end{document}
