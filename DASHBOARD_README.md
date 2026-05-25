@@ -52,13 +52,7 @@ python codes/preprocess.py --start-month 2019-08 --end-month 2026-04
 
 ## 5. Train forecast outputs
 
-Train the seasonal naive baseline and histogram gradient boosting for the busiest stations:
-
-```bash
-python codes/train_forecasts.py --all-stations --horizon-hours 168 --test-hours 168 --train-days 728 --backtest-windows 3
-```
-
-To train forecasts for all eligible stations:
+Train the seasonal naive baseline and histogram gradient boosting for all eligible stations:
 
 ```bash
 python codes/train_forecasts.py --all-stations --horizon-hours 168 --test-hours 168 --train-days 728 --backtest-windows 3
